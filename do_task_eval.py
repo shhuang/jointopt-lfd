@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-
 import pprint
 import argparse
 
+import planning
 from rapprentice import registration, colorize, berkeley_pr2, \
      animate_traj, ros2rave, plotting_openrave, task_execution, \
-     planning, tps, func_utils, resampling, ropesim, rope_initialization, clouds
+     tps, func_utils, resampling, ropesim, rope_initialization, clouds
 from rapprentice import math_utils as mu
 from rapprentice.yes_or_no import yes_or_no
 import pdb, time
@@ -220,15 +220,24 @@ def simulate_demo(new_xyz, seg_info, animate=False):
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             print "planning trajectory following"
-            with util.suppress_stdout():
-                new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
-                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)[0]
+            #with util.suppress_stdout():
+            new_joint_traj, _, feasible_traj = planning.plan_follow_traj(Globals.robot, manip_name,
+                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)
+
+            if not feasible_traj:
+                redprint("WARNING: Trajectory not feasible")
+
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
             ################################    
             redprint("Executing joint trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
         bodypart2trajs.append(bodypart2traj)
-        
+       
+        # TODO: Uncomment this; resupress above plan_follow_traj 
+        #if not feasible_traj:
+        #    success = False
+        #    break
+
         for lr in 'lr':
             gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
             prev_gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
@@ -383,6 +392,23 @@ def make_table_xml(translation, extents):
 """ % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
     return xml
 
+def make_bookshelf_xml(translation, extents):
+    xml = """
+<Environment>
+  <KinBody name="bookshelf">
+    <Body type="dynamic" name="bookshelf">
+      <Geom type="box">
+        <Translation>%f %f %f</Translation>
+        <extents>%f %f %f</extents>
+        <diffuseColor>.5 .5 .5</diffuseColor>
+        <RotationMat>1 0 0 0 1 0 0 0 1</RotationMat>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
+    return xml
+
 PR2_L_POSTURES = dict(
     untucked = [0.4,  1.0,   0.0,  -2.05,  0.0,  -0.1,  0.0],
     tucked = [0.06, 1.25, 1.79, -1.68, -1.73, -0.10, -0.09],
@@ -436,6 +462,9 @@ if __name__ == "__main__":
     parser.add_argument("--animation", type=int, default=0)
     parser.add_argument("--i_start", type=int, default=-1)
     parser.add_argument("--i_end", type=int, default=-1)
+
+    # For experiments with joint optimization
+    parser.add_argument("--elbow_obstacle", action="store_true")
     
     parser.add_argument("--tasks", nargs='+', type=int)
     parser.add_argument("--taskfile", type=str)
@@ -471,14 +500,18 @@ if __name__ == "__main__":
     table_height = init_rope_xyz[:,2].mean() - .02
     table_xml = make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     Globals.env.LoadData(table_xml)
+
+    if args.elbow_obstacle:
+        # bookshelf_xml = make_bookshelf_xml(translation=[0.9, 0.4, table_height+0.4], extents=[.4, .01, .4])
+        # Globals.env.LoadData(bookshelf_xml)
+        Globals.env.Load("data/bookshelves.env.xml")
+
     Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
     # create rope from rope in data
     rope_nodes = rope_initialization.find_path_through_point_cloud(init_rope_xyz)
     Globals.sim.create(rope_nodes)
     # move arms to the side
     reset_arms_to_side()
-
-    
 
     if args.animation:
         Globals.viewer = trajoptpy.GetViewer(Globals.env)
