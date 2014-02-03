@@ -100,16 +100,29 @@ def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
     f[1:d+1,0:d] -= np.diag(rot_coefs)
     
     A = np.r_[np.zeros((d+1,d+1)), np.c_[np.ones((n,1)), x_na]].T
+
+    n_vars = H.shape[0]
+    assert H.shape[1] == n_vars
+    assert f.shape[0] == n_vars
+    assert A.shape[1] == n_vars
+    n_cnts = A.shape[0]
     
-    return H, f, A
+    _u,_s,_vh = np.linalg.svd(A.T)
+    N = _u[:,n_cnts:]
+    
+    z = np.linalg.solve(2.0*N.T.dot(H.dot(N)), -N.T.dot(f))
+    
+    return H, f, A, N, z
 
 
-def joint_fit_tps_follow_traj(robot, manip_name, ee_links, old_hmats_list, old_trajs, x_na, y_ng, bend_coef=.1, rot_coef = 1e-5, wt_n=None):
+def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, bend_coef=.1, rot_coef = 1e-5, wt_n=None):
     """
     The order of dof indices in hmats and traj should be the same as especified by manip_name
     """
     
-    H, f, A = prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n)
+    (n,d) = x_na.shape
+    H, f, A, N, z = prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n)
+#     ipy.embed()
     
     n_steps = len(old_hmats_list[0])
     
@@ -120,8 +133,8 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, old_hmats_list, old_t
     request = {
         "basic_info" : {
             "n_steps" : n_steps,
-            "m_ext" : f.shape[0] - 4, 
-            "n_ext" : f.shape[1],
+            "m_ext" : n, 
+            "n_ext" : d,
             "manip" : manip_name,
             "start_fixed" : False
         },
@@ -179,10 +192,9 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, old_hmats_list, old_t
     
     request['init_info'] = {
                                 "type":"given_traj",
-                                "data":[x.tolist() for x in np.concatenate(init_trajs, axis=1)]
+                                "data":[x.tolist() for x in np.concatenate(init_trajs, axis=1)],
+                                "data_ext":[row.tolist() for row in z]
                            }
-    
-    # TODO initialize ext data
     
     s = json.dumps(request)
     prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem

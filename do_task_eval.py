@@ -406,7 +406,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             old_trajs.append(bodypart2traj[part_name])
        
         tpsbodypart2traj, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
-                                               ee_links, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
+                                               ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
                                                bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
         
         tpsbodypart2trajs.append(tpsbodypart2traj)
