@@ -129,6 +129,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     arm_inds = []
     for name in manip_name.split('+'):
         arm_inds.append(robot.GetManipulator(name).GetArmIndices())
+    arm_inds = np.concatenate(arm_inds)
     
     request = {
         "basic_info" : {

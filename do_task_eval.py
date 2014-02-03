@@ -345,6 +345,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
 
     miniseg_starts, miniseg_ends = split_trajectory_by_gripper(seg_info)    
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
+    success = True
     bodypart2trajs = []
     tpsbodypart2trajs = []
     
@@ -394,6 +395,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
         ee_links = []
         hmat_seglist = []
         old_trajs = []
+        tpsbodypart2traj = {}
         for lr in [key[0] for key in sorted(bodypart2traj.keys())]:
             part_name = {"l":"larm", "r":"rarm"}[lr]
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
@@ -405,7 +407,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             hmat_seglist.append(new_ee_traj_rs)
             old_trajs.append(bodypart2traj[part_name])
        
-        tpsbodypart2traj, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
+        tpsbodypart2traj[part_name], _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                                ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
                                                bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
         
@@ -420,7 +422,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
 
         if not success: break
 
-        if len(tpsbodypart2traj) > 0:
+        for tpsbodypart2traj in tpsbodypart2trajs:        
             dof_inds = []
             trajs = []
             for (part_name, traj) in tpsbodypart2traj.items():
