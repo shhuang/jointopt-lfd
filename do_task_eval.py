@@ -1,8 +1,9 @@
 #!/usr/bin/env python
+
 import pprint
 import argparse
-
 import planning
+
 from rapprentice import registration, colorize, berkeley_pr2, \
      animate_traj, ros2rave, plotting_openrave, task_execution, \
      tps, func_utils, resampling, ropesim, rope_initialization, clouds
@@ -27,6 +28,42 @@ import importlib
 from itertools import combinations
 import IPython as ipy
 import random
+
+COLLISION_DIST_THRESHOLD = 0.01
+
+def traj_collisions(traj, n=100):
+    """
+    Returns the set of collisions. 
+    manip = Manipulator or list of indices
+    """
+    traj_up = mu.interp2d(np.linspace(0,1,n), np.linspace(0,1,len(traj)), traj)
+    _ss = openravepy.RobotStateSaver(Globals.robot)
+
+    cc = trajoptpy.GetCollisionChecker(Globals.env)
+    links_to_exclude = Globals.robot.GetLinks()
+
+    for link in links_to_exclude:
+        for rope_link in Globals.env.GetKinBody('rope').GetLinks():
+            cc.ExcludeCollisionPair(link, rope_link)
+        cc.ExcludeCollisionPair(link, Globals.env.GetKinBody('table').GetLinks()[0])
+    
+    col_times = []
+    for (i,row) in enumerate(traj_up):
+        Globals.robot.SetActiveDOFValues(row)
+        col_now = cc.BodyVsAll(Globals.robot)
+        #with util.suppress_stdout():
+        #    col_now2 = cc.PlotCollisionGeometry()
+        col_now = [cn for cn in col_now if cn.GetDistance() < COLLISION_DIST_THRESHOLD]
+        if col_now:
+            print [cn.GetDistance() for cn in col_now]
+            col_times.append(i)
+            print "trajopt.CollisionChecker: ", len(col_now)
+        #print col_now2
+        
+    return col_times
+
+def traj_is_safe(traj, n=100):
+    return traj_collisions(traj, n) == []
 
 def redprint(msg):
     print colorize.colorize(msg, "red", bold=True)
@@ -189,6 +226,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
     success = True
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     bodypart2trajs = []
+
     for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):            
 
         ################################    
@@ -209,7 +247,8 @@ def simulate_demo(new_xyz, seg_info, animate=False):
         ####
 
         ### Generate fullbody traj
-        bodypart2traj = {}            
+        bodypart2traj = {}
+
         for (lr,old_joint_traj) in lr2oldtraj.items():
             
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
@@ -220,24 +259,16 @@ def simulate_demo(new_xyz, seg_info, animate=False):
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             print "planning trajectory following"
-            #with util.suppress_stdout():
-            new_joint_traj, _, feasible_traj = planning.plan_follow_traj(Globals.robot, manip_name,
-                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)
-
-            if not feasible_traj:
-                redprint("WARNING: Trajectory not feasible")
+            with util.suppress_stdout():
+                new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
+                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)[0]
 
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
             ################################    
             redprint("Executing joint trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
         bodypart2trajs.append(bodypart2traj)
-       
-        # TODO: Uncomment this; resupress above plan_follow_traj 
-        #if not feasible_traj:
-        #    success = False
-        #    break
-
+        
         for lr in 'lr':
             gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
             prev_gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
@@ -248,6 +279,19 @@ def simulate_demo(new_xyz, seg_info, animate=False):
         if not success: break
 
         if len(bodypart2traj) > 0:
+            dof_inds = []
+            trajs = []
+            for (part_name, traj) in bodypart2traj.items():
+                manip_name = {"larm":"leftarm","rarm":"rightarm"}[part_name]
+                dof_inds.extend(Globals.robot.GetManipulator(manip_name).GetArmIndices())            
+                trajs.append(traj)
+            full_traj = np.concatenate(trajs, axis=1)
+            Globals.robot.SetActiveDOFs(dof_inds)
+            if not traj_is_safe(full_traj):
+                redprint("Trajectory not feasible")
+                success = False
+                break
+
             success &= sim_traj_maybesim(bodypart2traj, animate=animate)
 
         if not success: break
@@ -392,23 +436,6 @@ def make_table_xml(translation, extents):
 """ % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
     return xml
 
-def make_bookshelf_xml(translation, extents):
-    xml = """
-<Environment>
-  <KinBody name="bookshelf">
-    <Body type="dynamic" name="bookshelf">
-      <Geom type="box">
-        <Translation>%f %f %f</Translation>
-        <extents>%f %f %f</extents>
-        <diffuseColor>.5 .5 .5</diffuseColor>
-        <RotationMat>1 0 0 0 1 0 0 0 1</RotationMat>
-      </Geom>
-    </Body>
-  </KinBody>
-</Environment>
-""" % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
-    return xml
-
 PR2_L_POSTURES = dict(
     untucked = [0.4,  1.0,   0.0,  -2.05,  0.0,  -0.1,  0.0],
     tucked = [0.06, 1.25, 1.79, -1.68, -1.73, -0.10, -0.09],
@@ -463,7 +490,6 @@ if __name__ == "__main__":
     parser.add_argument("--i_start", type=int, default=-1)
     parser.add_argument("--i_end", type=int, default=-1)
 
-    # For experiments with joint optimization
     parser.add_argument("--elbow_obstacle", action="store_true")
     
     parser.add_argument("--tasks", nargs='+', type=int)
@@ -494,16 +520,15 @@ if __name__ == "__main__":
     Globals.env.Load("robots/pr2-beta-static.zae")
     Globals.robot = Globals.env.GetRobots()[0]
 
+    trajoptpy.SetInteractive(args.interactive)
+
     actionfile = h5py.File(args.actionfile, 'r')
     
     init_rope_xyz, _ = load_fake_data_segment(actionfile, args.fake_data_segment, args.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
     table_height = init_rope_xyz[:,2].mean() - .02
     table_xml = make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     Globals.env.LoadData(table_xml)
-
     if args.elbow_obstacle:
-        # bookshelf_xml = make_bookshelf_xml(translation=[0.9, 0.4, table_height+0.4], extents=[.4, .01, .4])
-        # Globals.env.LoadData(bookshelf_xml)
         Globals.env.Load("data/bookshelves.env.xml")
 
     Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
@@ -512,6 +537,14 @@ if __name__ == "__main__":
     Globals.sim.create(rope_nodes)
     # move arms to the side
     reset_arms_to_side()
+
+    cc = trajoptpy.GetCollisionChecker(Globals.env)
+    links_to_exclude = Globals.robot.GetLinks()
+
+    for link in links_to_exclude:
+        for rope_link in Globals.env.GetKinBody('rope').GetLinks():
+            cc.ExcludeCollisionPair(link, rope_link)
+        cc.ExcludeCollisionPair(link, Globals.env.GetKinBody('table').GetLinks()[0])
 
     if args.animation:
         Globals.viewer = trajoptpy.GetViewer(Globals.env)
@@ -551,6 +584,9 @@ if __name__ == "__main__":
     def value_fn(state):
         state = state[:]
         return max(q_value_fn(state, action) for action in actions)
+
+    num_successes = 0
+    num_total = 0
 
     for i_task, demo_id_rope_nodes in (holdoutfile.iteritems() if not tasks else [(unicode(t),holdoutfile[unicode(t)]) for t in tasks]):
         reset_arms_to_side()
@@ -638,5 +674,11 @@ if __name__ == "__main__":
                     for (bodypart, bodyparttraj) in traj.iteritems():
                         traj_g[str(bodypart)] = bodyparttraj
                 result_file[i_task][str(i_step)]['values'] = q_values_root
+
+        if is_knot(Globals.sim.observe_cloud()):
+            num_successes += 1
+        num_total += 1
+
+        redprint('Successes / Total: ' + str(num_successes) + '/' + str(num_total))
         if save_results:
             result_file.close()
