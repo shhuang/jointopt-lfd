@@ -768,7 +768,7 @@ if __name__ == "__main__":
                 break;
 
             redprint("Choosing an action")
-            q_values = [q_value_fn(state, action) for action in actions[:1]]
+            q_values = [q_value_fn(state, action) for action in actions]
             q_values_root = q_values
             rope_tf = get_rope_transforms()
 
