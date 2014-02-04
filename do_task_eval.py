@@ -30,6 +30,7 @@ import IPython as ipy
 import random
 
 COLLISION_DIST_THRESHOLD = 0.01
+MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
 
 def traj_collisions(traj, n=100):
     """
@@ -224,6 +225,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
 
     miniseg_starts, miniseg_ends = split_trajectory_by_gripper(seg_info)    
     success = True
+    feasible = True
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     bodypart2trajs = []
 
@@ -290,6 +292,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
             if not traj_is_safe(full_traj):
                 redprint("Trajectory not feasible")
                 success = False
+                feasible = False
                 break
 
             success &= sim_traj_maybesim(bodypart2traj, animate=animate)
@@ -304,7 +307,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, bodypart2trajs
+    return success, feasible, bodypart2trajs
 
 def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -346,6 +349,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     miniseg_starts, miniseg_ends = split_trajectory_by_gripper(seg_info)    
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     success = True
+    feasible = True
     bodypart2trajs = []
     tpsbodypart2trajs = []
     
@@ -434,6 +438,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             if not traj_is_safe(full_traj):
                 redprint("Trajectory not feasible")
                 success = False
+                feasible = False
                 break
 
             success &= sim_traj_maybesim(tpsbodypart2traj, animate=animate)
@@ -448,7 +453,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, tpsbodypart2traj
+    return success, feasible, tpsbodypart2traj
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -800,7 +805,7 @@ if __name__ == "__main__":
                 for (q, a, tf, r_a) in agenda:
                     set_rope_transforms(tf)                 
                     cur_xyz = Globals.sim.observe_cloud()
-                    success, bodypart2trajs = simulate_demo_fn(cur_xyz, Globals.actionfile[a], animate=False)
+                    success, feasible, bodypart2trajs = simulate_demo_fn(cur_xyz, Globals.actionfile[a], animate=False)
                     if args.animation:
                         Globals.viewer.Step()
                     result_cloud = Globals.sim.observe_cloud()
@@ -829,7 +834,7 @@ if __name__ == "__main__":
             if best_root_action is None:
                 best_root_action = agenda[0][-1]
             set_rope_transforms(rope_tf) # reset rope to initial state
-            success, trajs = simulate_demo_fn(new_xyz, Globals.actionfile[best_root_action], animate=args.animation)
+            success, feasible, trajs = simulate_demo_fn(new_xyz, Globals.actionfile[best_root_action], animate=args.animation)
             set_rope_transforms(get_rope_transforms())
             
             if save_results:
