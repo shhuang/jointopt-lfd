@@ -619,7 +619,7 @@ def regcost_trajopt_feature_fn(state, action):
     return np.array([float(regcost) / get_ds_cloud(action).shape[0] + \
                      float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
 
-def regcost_jointop_feature_fn(state, action):
+def regcost_jointopt_feature_fn(state, action):
     # TODO: Interface this with the jointopt code
     print "NOT IMPLEMENTED YET"
 
