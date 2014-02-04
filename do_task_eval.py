@@ -424,7 +424,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
 
         if not success: break
 
-        for tpsbodypart2traj in tpsbodypart2trajs:        
+        if len(tpsbodypart2traj) > 0:
             dof_inds = []
             trajs = []
             for (part_name, traj) in tpsbodypart2traj.items():
