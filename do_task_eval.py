@@ -2,7 +2,7 @@
 
 import pprint
 import argparse
-import planning
+import planning, tps_registration
 
 from rapprentice import registration, colorize, berkeley_pr2, \
      animate_traj, ros2rave, plotting_openrave, task_execution, \
@@ -306,6 +306,149 @@ def simulate_demo(new_xyz, seg_info, animate=False):
     
     return success, bodypart2trajs
 
+def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
+    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
+    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
+    
+    redprint("Generating end-effector trajectory")    
+    
+    handles = []
+    old_xyz = np.squeeze(seg_info["cloud_xyz"])
+    handles.append(Globals.env.plot3(old_xyz,5, (1,0,0)))
+    handles.append(Globals.env.plot3(new_xyz,5, (0,0,1)))
+    
+    old_xyz = clouds.downsample(old_xyz, DS_SIZE)
+    new_xyz = clouds.downsample(new_xyz, DS_SIZE)
+
+    link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
+    hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
+    hmat_dict = dict(hmat_list)
+    if args.gripper_weighting:
+        interest_pts = get_closing_pts(seg_info)
+        raise NonImplementedError
+    else:
+        interest_pts = None
+#     lr2eetraj = warp_hmats(old_xyz, new_xyz, hmat_list, interest_pts)[0]
+    
+    scaled_xyz_src, src_params = registration.unit_boxify(old_xyz)
+    scaled_xyz_targ, targ_params = registration.unit_boxify(new_xyz)
+    f,g, xtarg_nd, bend_coef, wt_n, rot_coef = tps_registration.tps_rpm_bij(scaled_xyz_src, scaled_xyz_targ, plot_cb=None,
+                                   plotting=0, rot_reg=np.r_[1e-4, 1e-4, 1e-1], 
+                                   n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2,
+                                   x_weights=None)
+    f = registration.unscale_tps(f, src_params, targ_params)
+    unscaled_xtarg_nd = tps_registration.unscale_tps_points(xtarg_nd, targ_params[0], targ_params[1])
+
+    lr2eetraj = {}
+    for k, hmats in hmat_list:
+        lr2eetraj[k] = f.transform_hmats(hmats)
+
+    miniseg_starts, miniseg_ends = split_trajectory_by_gripper(seg_info)    
+    print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
+    success = True
+    bodypart2trajs = []
+    tpsbodypart2trajs = []
+    
+    for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):            
+
+        ################################    
+        redprint("Generating joint trajectory for part %i"%(i_miniseg))
+
+        # figure out how we're gonna resample stuff
+        lr2oldtraj = {}
+        for lr in 'lr':
+            manip_name = {"l":"leftarm", "r":"rightarm"}[lr]                 
+            old_joint_traj = asarray(seg_info[manip_name][i_start:i_end+1])
+            #print (old_joint_traj[1:] - old_joint_traj[:-1]).ptp(axis=0), i_start, i_end
+            if arm_moved(old_joint_traj):       
+                lr2oldtraj[lr] = old_joint_traj   
+        if len(lr2oldtraj) > 0:
+            old_total_traj = np.concatenate(lr2oldtraj.values(), 1)
+            JOINT_LENGTH_PER_STEP = .1
+            _, timesteps_rs = unif_resample(old_total_traj, JOINT_LENGTH_PER_STEP)
+        ####
+
+        ### Generate fullbody traj
+        bodypart2traj = {}
+
+        for (lr,old_joint_traj) in lr2oldtraj.items():
+            
+            manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
+            
+            old_joint_traj_rs = mu.interp2d(timesteps_rs, np.arange(len(old_joint_traj)), old_joint_traj)
+            
+            ee_link_name = "%s_gripper_tool_frame"%lr
+            new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
+            new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
+            print "planning trajectory following"
+            with util.suppress_stdout():
+                new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
+                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)[0]
+
+            part_name = {"l":"larm", "r":"rarm"}[lr]
+            bodypart2traj[part_name] = new_joint_traj
+            ################################    
+            redprint("Executing joint trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
+        bodypart2trajs.append(bodypart2traj)
+        
+        manip_names = []
+        ee_links = []
+        hmat_seglist = []
+        old_trajs = []
+        tpsbodypart2traj = {}
+        for lr in [key[0] for key in sorted(bodypart2traj.keys())]:
+            part_name = {"l":"larm", "r":"rarm"}[lr]
+            manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
+            manip_names.append(manip_name)
+            ee_link_name = "%s_gripper_tool_frame"%lr
+            ee_links.append(Globals.robot.GetLink(ee_link_name))
+            new_ee_traj = hmat_dict[lr][i_start:i_end+1]
+            new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
+            hmat_seglist.append(new_ee_traj_rs)
+            old_trajs.append(bodypart2traj[part_name])
+       
+        tpsbodypart2traj[part_name], _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
+                                               ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
+                                               bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+        
+        tpsbodypart2trajs.append(tpsbodypart2traj)
+    
+        for lr in 'lr':
+            gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
+            prev_gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
+            if not set_gripper_maybesim(lr, gripper_open, prev_gripper_open):
+                redprint("Grab %s failed" % lr)
+                success = False
+
+        if not success: break
+
+        for tpsbodypart2traj in tpsbodypart2trajs:        
+            dof_inds = []
+            trajs = []
+            for (part_name, traj) in tpsbodypart2traj.items():
+                manip_name = {"larm":"leftarm","rarm":"rightarm"}[part_name]
+                dof_inds.extend(Globals.robot.GetManipulator(manip_name).GetArmIndices())            
+                trajs.append(traj)
+            full_traj = np.concatenate(trajs, axis=1)
+            Globals.robot.SetActiveDOFs(dof_inds)
+            if not traj_is_safe(full_traj):
+                redprint("Trajectory not feasible")
+                success = False
+                break
+
+            success &= sim_traj_maybesim(tpsbodypart2traj, animate=animate)
+
+        if not success: break
+
+    Globals.sim.settle(animate=animate)
+    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
+    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
+    if animate:
+        Globals.viewer.Step()
+    Globals.sim.release_rope('l')
+    Globals.sim.release_rope('r')
+    
+    return success, tpsbodypart2traj
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -505,6 +648,7 @@ if __name__ == "__main__":
     parser.add_argument("--gripper_weighting", action="store_true")
 
     parser.add_argument("--elbow_obstacle", action="store_true")
+    parser.add_argument("--jointopt", action="store_true")
     
     parser.add_argument("--tasks", nargs='+', type=int)
     parser.add_argument("--taskfile", type=str)
@@ -565,6 +709,11 @@ if __name__ == "__main__":
         print "move viewer to viewpoint that isn't stupid"
         print "then hit 'p' to continue"
         Globals.viewer.Idle()
+
+    if args.jointopt:
+        simulate_demo_fn = simulate_demo_jointopt
+    else:
+        simulate_demo_fn = simulate_demo
 
     #####################
     actions = h5py.File(args.actionfile, 'r')
@@ -651,7 +800,7 @@ if __name__ == "__main__":
                 for (q, a, tf, r_a) in agenda:
                     set_rope_transforms(tf)                 
                     cur_xyz = Globals.sim.observe_cloud()
-                    success, bodypart2trajs = simulate_demo(cur_xyz, Globals.actionfile[a], animate=False)
+                    success, bodypart2trajs = simulate_demo_fn(cur_xyz, Globals.actionfile[a], animate=False)
                     if args.animation:
                         Globals.viewer.Step()
                     result_cloud = Globals.sim.observe_cloud()
@@ -680,7 +829,7 @@ if __name__ == "__main__":
             if best_root_action is None:
                 best_root_action = agenda[0][-1]
             set_rope_transforms(rope_tf) # reset rope to initial state
-            success, trajs = simulate_demo(new_xyz, Globals.actionfile[best_root_action], animate=args.animation)
+            success, trajs = simulate_demo_fn(new_xyz, Globals.actionfile[best_root_action], animate=args.animation)
             set_rope_transforms(get_rope_transforms())
             
             if save_results:
