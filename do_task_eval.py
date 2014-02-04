@@ -448,7 +448,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, feasible, tpsbodypart2traj
+    return success, feasible, tpsfulltrajs
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
