@@ -317,8 +317,8 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     
     handles = []
     old_xyz = np.squeeze(seg_info["cloud_xyz"])
-    handles.append(Globals.env.plot3(old_xyz,5, (1,0,0)))
-    handles.append(Globals.env.plot3(new_xyz,5, (0,0,1)))
+#     handles.append(Globals.env.plot3(old_xyz,5, (1,0,0)))
+#     handles.append(Globals.env.plot3(new_xyz,5, (0,0,1)))
     
     old_xyz = clouds.downsample(old_xyz, DS_SIZE)
     new_xyz = clouds.downsample(new_xyz, DS_SIZE)
@@ -340,7 +340,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
                                    n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2,
                                    x_weights=None)
     f = registration.unscale_tps(f, src_params, targ_params)
-    unscaled_xtarg_nd = tps_registration.unscale_tps_points(xtarg_nd, targ_params[0], targ_params[1])
+    unscaled_xtarg_nd = tps_registration.unscale_tps_points(xtarg_nd, targ_params[0], targ_params[1]) # should be close to new_xyz but with the same number of points as old_xyz
 
     lr2eetraj = {}
     for k, hmats in hmat_list:
@@ -374,7 +374,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
 
         ### Generate fullbody traj
         bodypart2traj = {}
-
+        redprint("Optimizing JOINT trajectory for part %i"%i_miniseg)
         for (lr,old_joint_traj) in lr2oldtraj.items():
             
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
@@ -384,15 +384,16 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             ee_link_name = "%s_gripper_tool_frame"%lr
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
-            print "planning trajectory following"
             with util.suppress_stdout():
+                trajoptpy.SetInteractive(False) # TODO fix hack
                 new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
                                                            Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)[0]
+                trajoptpy.SetInteractive(True)
 
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
             ################################    
-            redprint("Executing joint trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
+        redprint("Finished JOINT trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
         bodypart2trajs.append(bodypart2traj)
         
         manip_names = []
@@ -400,6 +401,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
         hmat_seglist = []
         old_trajs = []
         tpsbodypart2traj = {}
+        redprint("Optimizing TPS trajectory for part %i"%i_miniseg)
         for lr in [key[0] for key in sorted(bodypart2traj.keys())]:
             part_name = {"l":"larm", "r":"rarm"}[lr]
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
@@ -414,7 +416,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
         tpsbodypart2traj[part_name], _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                                ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
                                                bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
-        
+        redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, tpsbodypart2traj.keys()))
         tpsbodypart2trajs.append(tpsbodypart2traj)
     
         for lr in 'lr':
