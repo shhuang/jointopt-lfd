@@ -226,6 +226,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
     miniseg_starts, miniseg_ends = split_trajectory_by_gripper(seg_info)    
     success = True
     feasible = True
+    misgrasp = False
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     bodypart2trajs = []
 
@@ -276,6 +277,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
             prev_gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
             if not set_gripper_maybesim(lr, gripper_open, prev_gripper_open):
                 redprint("Grab %s failed" % lr)
+                misgrasp = True
                 success = False
 
         if not success: break
@@ -307,7 +309,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, feasible, bodypart2trajs
+    return success, feasible, misgrasp, bodypart2trajs
 
 def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -350,6 +352,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     success = True
     feasible = True
+    misgrasp = False
     bodypart2trajs = []
     tpsbodypart2trajs = []
     
@@ -425,6 +428,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             if not set_gripper_maybesim(lr, gripper_open, prev_gripper_open):
                 redprint("Grab %s failed" % lr)
                 success = False
+                misgrasp = True
 
         if not success: break
 
@@ -455,7 +459,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, feasible, tpsbodypart2traj
+    return success, feasible, misgrasp, tpsbodypart2traj
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -539,7 +543,7 @@ def load_fake_data_segment(demofile, fake_data_segment, fake_data_transform, set
     return new_xyz, r2r
 
 def get_ds_cloud(action):
-    return clouds.downsample(Globals.actionfile[action]['cloud_xyz'], DS_SIZE)
+    return clouds.downsample(Globals.actions[action]['cloud_xyz'], DS_SIZE)
 
 def unif_resample(traj, max_diff, wt = None):        
     """
@@ -613,8 +617,8 @@ def regcost_feature_fn(state, action):
 def regcost_trajopt_feature_fn(state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     regcost = registration_cost_cheap(state[1], get_ds_cloud(action))
-    target_trajs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actionfile[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
-    orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actionfile)
+    target_trajs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
+    orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actions)
     err = traj_utils.follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
     return np.array([float(regcost) / get_ds_cloud(action).shape[0] + \
                      float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
@@ -633,7 +637,7 @@ class Globals:
     log = None
     viewer = None
     resample_rope = None
-    actionfile = None
+    actions = None
 
 if __name__ == "__main__":
     """
@@ -656,6 +660,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--elbow_obstacle", action="store_true")
     parser.add_argument("--jointopt", action="store_true")
+    parser.add_argument("--search_until_feasible", action="store_true")
     
     parser.add_argument("--tasks", nargs='+', type=int)
     parser.add_argument("--taskfile", type=str)
@@ -687,9 +692,9 @@ if __name__ == "__main__":
 
     trajoptpy.SetInteractive(args.interactive)
 
-    Globals.actionfile = h5py.File(args.actionfile, 'r')
+    Globals.actions = h5py.File(args.actionfile, 'r')
     
-    init_rope_xyz, _ = load_fake_data_segment(Globals.actionfile, args.fake_data_segment, args.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
+    init_rope_xyz, _ = load_fake_data_segment(Globals.actions, args.fake_data_segment, args.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
     table_height = init_rope_xyz[:,2].mean() - .02
     table_xml = make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     Globals.env.LoadData(table_xml)
@@ -723,8 +728,6 @@ if __name__ == "__main__":
         simulate_demo_fn = simulate_demo
 
     #####################
-    actions = h5py.File(args.actionfile, 'r')
-
     if args.warpingcost == "regcost":
         feature_fn = regcost_feature_fn
     elif args.warpingcost == "regcost-trajopt":
@@ -758,7 +761,7 @@ if __name__ == "__main__":
         return np.dot(weights, feature_fn(state, action)) #+ w0
     def value_fn(state):
         state = state[:]
-        return max(q_value_fn(state, action) for action in actions)
+        return max(q_value_fn(state, action) for action in Globals.actions)
 
     num_successes = 0
     num_total = 0
@@ -793,54 +796,66 @@ if __name__ == "__main__":
             if is_knot(Globals.sim.observe_cloud()):
                 break;
 
-            redprint("Choosing an action")
-            q_values = [q_value_fn(state, action) for action in actions]
-            q_values_root = q_values
-            rope_tf = get_rope_transforms()
+            num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
 
-            assert args.lookahead_width>= 1, 'Lookahead branches set to zero will fail to select any action'
-            agenda = sorted(zip(q_values, actions), key = lambda v: -v[0])[:args.lookahead_width]
-            agenda = [(v, a, rope_tf, a) for (v, a) in agenda] # state is (value, most recent action, rope_transforms, root action)
-            best_root_action = None
-            for _ in range(args.lookahead_depth):
-                expansion_results = []
-                for (q, a, tf, r_a) in agenda:
-                    set_rope_transforms(tf)                 
-                    cur_xyz = Globals.sim.observe_cloud()
-                    success, feasible, bodypart2trajs = simulate_demo_fn(cur_xyz, Globals.actionfile[a], animate=False)
-                    if args.animation:
-                        Globals.viewer.Step()
-                    result_cloud = Globals.sim.observe_cloud()
-                    if is_knot(result_cloud):
-                        best_root_action = r_a
+            for i_choice in range(num_actions_to_try):
+                redprint("Choosing an action")
+                q_values = [q_value_fn(state, action) for action in Globals.actions]
+                q_values_root = q_values
+                rope_tf = get_rope_transforms()
+
+                infeasible_set = set()
+                assert args.lookahead_width>= 1, 'Lookahead branches set to zero will fail to select any action'
+                agenda = sorted(zip(q_values, Globals.actions), key = lambda v: -v[0])
+                agenda = [(v, a, rope_tf, a) for (v, a) in agenda if a not in infeasible_set][:args.lookahead_width] # state is (value, most recent action, rope_transforms, root action)
+                best_root_action = None
+                for _ in range(args.lookahead_depth):
+                    expansion_results = []
+                    for (q, a, tf, r_a) in agenda:
+                        set_rope_transforms(tf)                 
+                        cur_xyz = Globals.sim.observe_cloud()
+                        success, feasible, misgrasp, bodypart2trajs = simulate_demo_fn(cur_xyz, Globals.actions[a], animate=False)
+                        if args.animation:
+                            Globals.viewer.Step()
+                        result_cloud = Globals.sim.observe_cloud()
+                        if is_knot(result_cloud):
+                            best_root_action = r_a
+                            break
+                        expansion_results.append((result_cloud, a, success, get_rope_transforms(), r_a))
+                    if best_root_action is not None:
+                        redprint('Knot Found, stopping search early')
                         break
-                    expansion_results.append((result_cloud, a, success, get_rope_transforms(), r_a))
-                if best_root_action is not None:
-                    redprint('Knot Found, stopping search early')
-                    break
-                agenda = []
-                for (cld, incoming_a, success, tf, r_a) in expansion_results:
-                    if not success:
-                        agenda.append((-np.inf, actions[0], tf, r_a))
-                        continue
-                    next_state = ("eval_%i"%get_unique_id(), cld)
-                    q_values = [(q_value_fn(next_state, action), action, tf, r_a) for action in actions]
-                    agenda.extend(q_values)
-                agenda.sort(key = lambda v: -v[0])
-                agenda = agenda[:args.lookahead_width]                    
-                first_root_action = agenda[0][-1]
-                if all(r_a == first_root_action for (_, _, _, r_a) in agenda):
-                    best_root_action = first_root_action
-                    redprint('All best actions have same root, stopping search early')
-                    break
-            if best_root_action is None:
-                best_root_action = agenda[0][-1]
-            set_rope_transforms(rope_tf) # reset rope to initial state
-            success, feasible, trajs = simulate_demo_fn(new_xyz, Globals.actionfile[best_root_action], animate=args.animation)
+                    agenda = []
+                    for (cld, incoming_a, success, tf, r_a) in expansion_results:
+                        if not success:
+                            agenda.append((-np.inf, Globals.actions[0], tf, r_a))
+                            continue
+                        next_state = ("eval_%i"%get_unique_id(), cld)
+                        q_values = [(q_value_fn(next_state, action), action, tf, r_a) for action in Globals.actions]
+                        agenda.extend(q_values)
+                    agenda.sort(key = lambda v: -v[0])
+                    agenda = agenda[:args.lookahead_width]                    
+                    first_root_action = agenda[0][-1]
+                    if all(r_a == first_root_action for (_, _, _, r_a) in agenda):
+                        best_root_action = first_root_action
+                        redprint('All best actions have same root, stopping search early')
+                        break
+                if best_root_action is None:
+                    best_root_action = agenda[0][-1]
+                set_rope_transforms(rope_tf) # reset rope to initial state
+                success, feasible, misgrasp, trajs = simulate_demo_fn(new_xyz, Globals.actions[best_root_action], animate=args.animation)
+                if feasible:  # try next action if TrajOpt cannot find feasible action
+                     break
+                else:
+                     infeasible_set.add(best_root_action)
+
+
             set_rope_transforms(get_rope_transforms())
             
             if save_results:
                 result_file[i_task].create_group(str(i_step))
+                result_file[i_task][str(i_step)]['misgrasp'] = 1 if misgrasp else 0
+                result_file[i_task][str(i_step)]['infeasible'] = 1 if not feasible else 0
                 result_file[i_task][str(i_step)]['rope_nodes'] = Globals.sim.rope.GetControlPoints()
                 result_file[i_task][str(i_step)]['best_action'] = str(best_root_action)
                 trajs_g = result_file[i_task][str(i_step)].create_group('trajs')
