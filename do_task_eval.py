@@ -31,6 +31,7 @@ import random
 
 COLLISION_DIST_THRESHOLD = 0.01
 MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
+TRAJOPT_MAX_ACTIONS = 10  # Number of actions to compute full feature (TPS + TrajOpt) on
 
 def traj_collisions(traj, n=100):
     """
@@ -647,8 +648,6 @@ if __name__ == "__main__":
     parser.add_argument("--animation", type=int, default=0)
     parser.add_argument("--i_start", type=int, default=-1)
     parser.add_argument("--i_end", type=int, default=-1)
-    parser.add_argument("--lookahead_width", type=int, default=1)
-    parser.add_argument("--lookahead_depth", type=int, default=0)
     parser.add_argument("--gripper_weighting", action="store_true")
 
     parser.add_argument("--elbow_obstacle", action="store_true")
@@ -748,6 +747,8 @@ if __name__ == "__main__":
     if args.i_start != -1 and args.i_end != -1:
         tasks = range(args.i_start, args.i_end)
 
+    def q_value_fn_regcost(state, action):
+        return np.dot(weights, regcost_feature_fn(state, action)) #+ w0
     def q_value_fn(state, action):
         return np.dot(weights, feature_fn(state, action)) #+ w0
     def value_fn(state):
@@ -788,6 +789,7 @@ if __name__ == "__main__":
                 break;
 
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
+            found_feasible_action = False
 
             for i_choice in range(num_actions_to_try):
                 redprint("Choosing an action")
@@ -796,50 +798,17 @@ if __name__ == "__main__":
                 rope_tf = get_rope_transforms()
 
                 infeasible_set = set()
-                assert args.lookahead_width>= 1, 'Lookahead branches set to zero will fail to select any action'
                 agenda = sorted(zip(q_values, Globals.actions), key = lambda v: -v[0])
                 agenda = [(v, a, rope_tf, a) for (v, a) in agenda if a not in infeasible_set][:args.lookahead_width] # state is (value, most recent action, rope_transforms, root action)
-                best_root_action = None
-                for _ in range(args.lookahead_depth):
-                    expansion_results = []
-                    for (q, a, tf, r_a) in agenda:
-                        set_rope_transforms(tf)                 
-                        cur_xyz = Globals.sim.observe_cloud()
-                        success, feasible, misgrasp, bodypart2trajs = simulate_demo_fn(cur_xyz, Globals.actions[a], animate=False)
-                        if args.animation:
-                            Globals.viewer.Step()
-                        result_cloud = Globals.sim.observe_cloud()
-                        if is_knot(result_cloud):
-                            best_root_action = r_a
-                            break
-                        expansion_results.append((result_cloud, a, success, get_rope_transforms(), r_a))
-                    if best_root_action is not None:
-                        redprint('Knot Found, stopping search early')
-                        break
-                    agenda = []
-                    for (cld, incoming_a, success, tf, r_a) in expansion_results:
-                        if not success:
-                            agenda.append((-np.inf, Globals.actions[0], tf, r_a))
-                            continue
-                        next_state = ("eval_%i"%get_unique_id(), cld)
-                        q_values = [(q_value_fn(next_state, action), action, tf, r_a) for action in Globals.actions]
-                        agenda.extend(q_values)
-                    agenda.sort(key = lambda v: -v[0])
-                    agenda = agenda[:args.lookahead_width]                    
-                    first_root_action = agenda[0][-1]
-                    if all(r_a == first_root_action for (_, _, _, r_a) in agenda):
-                        best_root_action = first_root_action
-                        redprint('All best actions have same root, stopping search early')
-                        break
-                if best_root_action is None:
-                    best_root_action = agenda[0][-1]
+
+                best_root_action = agenda[0][-1]
                 set_rope_transforms(rope_tf) # reset rope to initial state
                 success, feasible, misgrasp, trajs = simulate_demo_fn(new_xyz, Globals.actions[best_root_action], animate=args.animation)
                 if feasible:  # try next action if TrajOpt cannot find feasible action
+                     found_feasible_action = True
                      break
                 else:
                      infeasible_set.add(best_root_action)
-
 
             set_rope_transforms(get_rope_transforms())
             
@@ -855,6 +824,11 @@ if __name__ == "__main__":
                     for (bodypart, bodyparttraj) in traj.iteritems():
                         traj_g[str(bodypart)] = bodyparttraj
                 result_file[i_task][str(i_step)]['values'] = q_values_root
+
+            if not found_feasible_action:
+                # Skip to next knot tie if the action is infeasible -- since
+                # that means all future steps (up to 5) will have infeasible trajectories
+                break
 
         if is_knot(Globals.sim.observe_cloud()):
             num_successes += 1
