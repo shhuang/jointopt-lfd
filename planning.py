@@ -178,18 +178,31 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
         
         poses = [openravepy.poseFromMatrix(hmat) for hmat in old_hmats]
         for (i_step,pose) in enumerate(poses):
-            request["costs"].append(
-                {"type":"tps_pose",
-                 "params":{
-                    "x_na":[row.tolist() for row in x_na],
-                    "A" : [row.tolist() for row in A],
-                    "xyz":pose[4:7].tolist(),
-                    "wxyz":pose[0:4].tolist(),
-                    "link":ee_linkname,
-                    "timestep":i_step,
-                    "pos_coeffs":[10,10,10],
-                    "rot_coeffs":[10,10,10]
-                 }
+            if i_step != 0 and i_step != n_steps-1:
+                request["costs"].append(
+                    {"type":"tps_pose",
+                     "params":{
+                        "x_na":[row.tolist() for row in x_na],
+                        "A" : [row.tolist() for row in A],
+                        "xyz":pose[4:7].tolist(),
+                        "wxyz":pose[0:4].tolist(),
+                        "link":ee_linkname,
+                        "timestep":i_step,
+                        "pos_coeffs":[10,10,10],
+                        "rot_coeffs":[10,10,10]
+                     }
+                    })
+        for (i_step,hmat) in zip([0, n_steps-1], fn.transform_hmats(np.array([old_hmats[0], old_hmats[-1]]))):
+            pose = openravepy.poseFromMatrix(hmat)
+            request['constraints'].append(
+                {
+                    "type" : "pose", 
+                    "params" : {
+                        "xyz":pose[4:7].tolist(),
+                        "wxyz":pose[0:4].tolist(),
+                        "link": ee_linkname,
+                        "timestep" : i_step
+                    }
                 })
     
     request['init_info'] = {
