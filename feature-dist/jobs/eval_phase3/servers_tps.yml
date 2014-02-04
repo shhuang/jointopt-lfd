@@ -1,0 +1,36 @@
+# The file containing expert examples.
+datafile: jobs/eval_phase3/holdout_set_Jan24.h5
+
+# Output from each remote machine will be collected into this folder.
+outfolder: jobs/eval_phase3/out
+
+# The output file to create.
+outfile: jobs/eval_phase3/phase3_results_tps_trajopt.h5
+
+# This will be created if it doesn't exist. Used to store splits that are distributed to machines,
+# where a "split" is the subset of examples that a particular core runs on.
+splitsdir: jobs/eval_phase3/splits
+
+# This is the folder containing the scripts that will run on remote machines.
+payload:
+  path: jobs/eval_phase3/payload
+  additional-files:  # include additional files in the payload that aren't in the payload folder
+    - path: ../data/misc/actions.h5  # path to file on disk
+      archive-name: data/misc/actions.h5  # path inside the payload archive
+    - path: ../data/bookshelves.env.xml
+      archive-name: data/bookshelves.env.xml
+
+# For each server, specify host (the hostname), path (the directory to use on the remote, which
+# will be created if necessary), and cores (the number of cores to run with).
+servers:
+  - host: rll5.eecs.berkeley.edu
+    path: comp/eval_phase3
+    cores: 0
+
+  - host: rll7.eecs.berkeley.edu
+    path: comp/eval_phase3
+    cores: 7
+
+  - host: primus.banatao.berkeley.edu
+    path: comp/eval_phase3
+    cores: 7

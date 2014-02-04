@@ -388,6 +388,9 @@ def load_fake_data_segment(demofile, fake_data_segment, fake_data_transform, set
         r2r.set_values(Globals.robot, asarray(fake_seg["joint_states"]["position"][0]))
     return new_xyz, r2r
 
+def get_ds_cloud(action):
+    return clouds.downsample(Globals.actionfile[action]['cloud_xyz'], DS_SIZE)
+
 def unif_resample(traj, max_diff, wt = None):        
     """
     Resample a trajectory so steps have same length in joint space    
@@ -449,8 +452,26 @@ def mirror_arm_joints(x):
 def reset_arms_to_side():
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"],
                                Globals.robot.GetManipulator("leftarm").GetArmIndices())
+    #actionfile = None
     Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]),
                                Globals.robot.GetManipulator("rightarm").GetArmIndices())
+
+def regcost_feature_fn(state, action):
+    regcost = registration_cost_cheap(state[1], get_ds_cloud(action))
+    return np.array([regcost])
+   
+def regcost_trajopt_feature_fn(state, action):
+    link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
+    regcost = registration_cost_cheap(state[1], get_ds_cloud(action))
+    target_trajs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actionfile[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
+    orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actionfile)
+    err = traj_utils.follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
+    return np.array([float(regcost) / get_ds_cloud(action).shape[0] + \
+                     float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
+
+def regcost_jointop_feature_fn(state, action):
+    # TODO: Interface this with the jointopt code
+    print "NOT IMPLEMENTED YET"
 
 ###################
 
@@ -462,6 +483,7 @@ class Globals:
     log = None
     viewer = None
     resample_rope = None
+    actionfile = None
 
 if __name__ == "__main__":
     """
@@ -472,23 +494,15 @@ if __name__ == "__main__":
     
     parser.add_argument('actionfile', nargs='?', default='data/misc/actions.h5')
     parser.add_argument('holdoutfile', nargs='?', default='data/misc/holdout_set.h5')
-    parser.add_argument("weightfile", type=str)
+    parser.add_argument('warpingcost', choices=['regcost', 'regcost-trajopt', 'jointopt'])
     parser.add_argument("--resultfile", type=str) # don't save results if this is not specified
-    parser.add_argument("--lookahead_width", type=int, default=1)
-    parser.add_argument('--lookahead_depth', type=int, default=0)
     parser.add_argument('--ensemble', action='store_true')
-    parser.add_argument('--rbf', action='store_true')
-    parser.add_argument('--landmark_features')
-    parser.add_argument('--quad_landmark_features', action='store_true')
-    parser.add_argument('--only_landmark', action="store_true")
-    parser.add_argument("--quad_features", action="store_true")
-    parser.add_argument("--sc_features", action="store_true")
-    parser.add_argument("--rope_dist_features", action="store_true")
-    parser.add_argument("--traj_features", action="store_true")
-    parser.add_argument("--gripper_weighting", action="store_true")
     parser.add_argument("--animation", type=int, default=0)
     parser.add_argument("--i_start", type=int, default=-1)
     parser.add_argument("--i_end", type=int, default=-1)
+    parser.add_argument("--lookahead_width", type=int, default=1)
+    parser.add_argument("--lookahead_depth", type=int, default=0)
+    parser.add_argument("--gripper_weighting", action="store_true")
 
     parser.add_argument("--elbow_obstacle", action="store_true")
     
@@ -522,9 +536,9 @@ if __name__ == "__main__":
 
     trajoptpy.SetInteractive(args.interactive)
 
-    actionfile = h5py.File(args.actionfile, 'r')
+    Globals.actionfile = h5py.File(args.actionfile, 'r')
     
-    init_rope_xyz, _ = load_fake_data_segment(actionfile, args.fake_data_segment, args.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
+    init_rope_xyz, _ = load_fake_data_segment(Globals.actionfile, args.fake_data_segment, args.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
     table_height = init_rope_xyz[:,2].mean() - .02
     table_xml = make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     Globals.env.LoadData(table_xml)
@@ -553,14 +567,19 @@ if __name__ == "__main__":
         Globals.viewer.Idle()
 
     #####################
-    feature_fn, _, num_features, actions = select_feature_fn(args)
+    actions = h5py.File(args.actionfile, 'r')
 
-    weightfile = h5py.File(args.weightfile, 'r')
-    weights = weightfile['weights'][:]
-    w0 = weightfile['w0'][()] if 'w0' in weightfile else 0
-    weightfile.close()
+    if args.warpingcost == "regcost":
+        feature_fn = regcost_feature_fn
+    elif args.warpingcost == "regcost-trajopt":
+        feature_fn = regcost_trajopt_feature_fn
+    else:
+        feature_fn = jointopt_feature_fn
+
+    weights = np.array([-1])
+    num_features = 1
     assert weights.shape[0] == num_features, "Dimensions of weights and features don't match. Make sure the right feature is being used"
-    
+   
     holdoutfile = h5py.File(args.holdoutfile, 'r')
 
     save_results = args.resultfile is not None
@@ -580,7 +599,7 @@ if __name__ == "__main__":
         tasks = range(args.i_start, args.i_end)
 
     def q_value_fn(state, action):
-        return np.dot(weights, feature_fn(state, action)) + w0
+        return np.dot(weights, feature_fn(state, action)) #+ w0
     def value_fn(state):
         state = state[:]
         return max(q_value_fn(state, action) for action in actions)
@@ -632,7 +651,7 @@ if __name__ == "__main__":
                 for (q, a, tf, r_a) in agenda:
                     set_rope_transforms(tf)                 
                     cur_xyz = Globals.sim.observe_cloud()
-                    success, bodypart2trajs = simulate_demo(cur_xyz, actionfile[a], animate=False)
+                    success, bodypart2trajs = simulate_demo(cur_xyz, Globals.actionfile[a], animate=False)
                     if args.animation:
                         Globals.viewer.Step()
                     result_cloud = Globals.sim.observe_cloud()
@@ -661,7 +680,7 @@ if __name__ == "__main__":
             if best_root_action is None:
                 best_root_action = agenda[0][-1]
             set_rope_transforms(rope_tf) # reset rope to initial state
-            success, trajs = simulate_demo(new_xyz, actionfile[best_root_action], animate=args.animation)
+            success, trajs = simulate_demo(new_xyz, Globals.actionfile[best_root_action], animate=args.animation)
             set_rope_transforms(get_rope_transforms())
             
             if save_results:
