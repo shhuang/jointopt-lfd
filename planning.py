@@ -96,7 +96,7 @@ def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
     H[d+1:,d+1:] += bend_coef * K_nn
     rot_coefs = np.ones(d) * rot_coef if np.isscalar(rot_coef) else rot_coef
     H[1:d+1, 1:d+1] += np.diag(rot_coefs)
-    f = -WQ.T.dot(y_ng)
+    f = -2.0*WQ.T.dot(y_ng)
     f[1:d+1,0:d] -= np.diag(rot_coefs)
     
     A = np.r_[np.zeros((d+1,d+1)), np.c_[np.ones((n,1)), x_na]].T
@@ -158,6 +158,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
             "params" : {"H" : [row.tolist() for row in H],
                         "f" : f.tolist(),
                         "A" : [row.tolist() for row in A],
+                        "x_na" : [row.tolist() for row in x_na],
             }
         }
         ],
