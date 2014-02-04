@@ -142,11 +142,6 @@ def unwrap_in_place(t):
         raise NotImplementedError
 
 def sim_traj_maybesim(bodypart2traj, animate=False, interactive=False):
-    def sim_callback(i):
-        Globals.sim.step()
-
-    animate_speed = 10 if animate else 0
-
     dof_inds = []
     trajs = []
     for (part_name, traj) in bodypart2traj.items():
@@ -155,6 +150,13 @@ def sim_traj_maybesim(bodypart2traj, animate=False, interactive=False):
         trajs.append(traj)
     full_traj = np.concatenate(trajs, axis=1)
     Globals.robot.SetActiveDOFs(dof_inds)
+    sim_full_traj_maybesim(full_traj, dof_inds, animate=animate, interactive=interactive)
+
+def sim_full_traj_maybesim(full_traj, dof_inds, animate=False, interactive=False):
+    def sim_callback(i):
+        Globals.sim.step()
+
+    animate_speed = 10 if animate else 0
 
     # make the trajectory slow enough for the simulation
     full_traj = ropesim.retime_traj(Globals.robot, dof_inds, full_traj)
@@ -347,7 +349,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     success = True
     bodypart2trajs = []
-    tpsbodypart2trajs = []
+    tpsfulltrajs = []
     
     for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):            
 
@@ -381,64 +383,55 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             with util.suppress_stdout():
-                trajoptpy.SetInteractive(False) # TODO fix hack
                 new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
                                                            Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)[0]
-                trajoptpy.SetInteractive(True)
-
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
             ################################    
         redprint("Finished JOINT trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
         bodypart2trajs.append(bodypart2traj)
         
-        manip_names = []
-        ee_links = []
-        hmat_seglist = []
-        old_trajs = []
-        tpsbodypart2traj = {}
-        redprint("Optimizing TPS trajectory for part %i"%i_miniseg)
-        for lr in [key[0] for key in sorted(bodypart2traj.keys())]:
-            part_name = {"l":"larm", "r":"rarm"}[lr]
-            manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
-            manip_names.append(manip_name)
-            ee_link_name = "%s_gripper_tool_frame"%lr
-            ee_links.append(Globals.robot.GetLink(ee_link_name))
-            new_ee_traj = hmat_dict[lr][i_start:i_end+1]
-            new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
-            hmat_seglist.append(new_ee_traj_rs)
-            old_trajs.append(bodypart2traj[part_name])
-       
-        tpsbodypart2traj[part_name], _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
-                                               ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                               bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
-        redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, tpsbodypart2traj.keys()))
-        tpsbodypart2trajs.append(tpsbodypart2traj)
-    
         for lr in 'lr':
             gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
             prev_gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
             if not set_gripper_maybesim(lr, gripper_open, prev_gripper_open):
                 redprint("Grab %s failed" % lr)
                 success = False
-
+                
         if not success: break
-
-        if len(tpsbodypart2traj) > 0:
+        
+        if len(bodypart2traj) > 0:
+            manip_names = []
+            ee_links = []
+            hmat_seglist = []
+            old_trajs = []
+            redprint("Optimizing TPS trajectory for part %i"%i_miniseg)
+            for lr in [key[0] for key in sorted(bodypart2traj.keys())]:
+                part_name = {"l":"larm", "r":"rarm"}[lr]
+                manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
+                manip_names.append(manip_name)
+                ee_link_name = "%s_gripper_tool_frame"%lr
+                ee_links.append(Globals.robot.GetLink(ee_link_name))
+                new_ee_traj = hmat_dict[lr][i_start:i_end+1]
+                new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
+                hmat_seglist.append(new_ee_traj_rs)
+                old_trajs.append(bodypart2traj[part_name])
+           
+            tpsfulltraj, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
+                                                   ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
+                                                   alpha=1.0, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+            redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
+            tpsfulltrajs.append(tpsfulltraj)
+    
             dof_inds = []
-            trajs = []
-            for (part_name, traj) in tpsbodypart2traj.items():
-                manip_name = {"larm":"leftarm","rarm":"rightarm"}[part_name]
+            for manip_name in manip_names:
                 dof_inds.extend(Globals.robot.GetManipulator(manip_name).GetArmIndices())            
-                trajs.append(traj)
-            full_traj = np.concatenate(trajs, axis=1)
             Globals.robot.SetActiveDOFs(dof_inds)
-            if not traj_is_safe(full_traj):
+            if not traj_is_safe(tpsfulltraj):
                 redprint("Trajectory not feasible")
                 success = False
                 break
-
-            success &= sim_traj_maybesim(tpsbodypart2traj, animate=animate)
+            success &= sim_full_traj_maybesim(tpsfulltraj, dof_inds, animate=animate)
 
         if not success: break
 
@@ -450,7 +443,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, tpsbodypart2traj
+    return success, tpsfulltrajs
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -679,8 +672,6 @@ if __name__ == "__main__":
     Globals.env.StopSimulation()
     Globals.env.Load("robots/pr2-beta-static.zae")
     Globals.robot = Globals.env.GetRobots()[0]
-
-    trajoptpy.SetInteractive(args.interactive)
 
     Globals.actionfile = h5py.File(args.actionfile, 'r')
     
