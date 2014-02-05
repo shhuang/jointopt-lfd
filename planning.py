@@ -28,16 +28,16 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
             "type" : "joint_vel",
             "params": {"coeffs" : [n_steps/5.]}
         },
-        ],
-        "constraints" : [
         {
             "type" : "collision",
             "params" : {
               "continuous" : True,
-              "coeffs" : [10],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
+              "coeffs" : [1000],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
               "dist_pen" : [0.01]  # robot-obstacle distance that penalty kicks in. expands to length n_timesteps
             }
         }                
+        ],
+        "constraints" : [
         ],
         "init_info" : {
             "type":"given_traj",
@@ -116,7 +116,7 @@ def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
     return H, f, A, N, z
 
 
-def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta = 10., bend_coef=.1, rot_coef = 1e-5, wt_n=None):
+def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta = 1., bend_coef=.1, rot_coef = 1e-5, wt_n=None):
     """
     The order of dof indices in hmats and traj should be the same as especified by manip_name
     """
@@ -140,10 +140,10 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
             "start_fixed" : False
         },
         "costs" : [
-        {
-            "type" : "joint_vel",
-            "params": {"coeffs" : [n_steps/5.]}
-        },
+#         {
+#             "type" : "joint_vel",
+#             "params": {"coeffs" : [n_steps/5.]}
+#         },
         {
             "type" : "tps",
             "name" : "tps",
@@ -153,17 +153,17 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                         "N" : [row.tolist() for row in N],
                         "alpha" : alpha,
             }
-        }
-        ],
-        "constraints" : [
+        },
         {
             "type" : "collision",
             "params" : {
               "continuous" : True,
-              "coeffs" : [10],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
+              "coeffs" : [1000],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
               "dist_pen" : [0.01]  # robot-obstacle distance that penalty kicks in. expands to length n_timesteps
             }
         },
+        ],
+        "constraints" : [
         ],
     }
     

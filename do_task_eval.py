@@ -29,7 +29,7 @@ from itertools import combinations
 import IPython as ipy
 import random
 
-COLLISION_DIST_THRESHOLD = 0.01
+COLLISION_DIST_THRESHOLD = 0.0
 MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
 
 def traj_collisions(traj, n=100):
@@ -427,10 +427,10 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
            
             tpsfulltraj, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                                    ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                                   alpha=1.0, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+                                                   alpha=1.0, beta = 1.0, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
             redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
             tpsfulltrajs.append(tpsfulltraj)
-    
+
             dof_inds = []
             for manip_name in manip_names:
                 dof_inds.extend(Globals.robot.GetManipulator(manip_name).GetArmIndices())            
@@ -452,7 +452,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, feasible, misgrasps, tpsfulltrajs
+    return success, feasible, misgrasp, tpsfulltrajs
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -722,9 +722,9 @@ if __name__ == "__main__":
     table_xml = make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     Globals.env.LoadData(table_xml)
     if args.elbow_obstacle:
-        Globals.env.Load("data/bookshelves.env.xml")
-#         Globals.env.LoadData(make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
-#         Globals.env.LoadData(make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
+#         Globals.env.Load("data/bookshelves.env.xml")
+        Globals.env.LoadData(make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
+        Globals.env.LoadData(make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
 
     Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
     # create rope from rope in data
