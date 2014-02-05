@@ -4,7 +4,7 @@ from trajoptpy.check_traj import traj_is_safe
 from rapprentice import tps
 import IPython as ipy
 
-def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj):
+def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.):
         
     n_steps = len(new_hmats)
     assert old_traj.shape[0] == n_steps
@@ -32,7 +32,7 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj):
             "type" : "collision",
             "params" : {
               "continuous" : True,
-              "coeffs" : [1],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
+              "coeffs" : [1000],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
               "dist_pen" : [0.01]  # robot-obstacle distance that penalty kicks in. expands to length n_timesteps
             }
         }                
@@ -54,15 +54,16 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj):
                 "wxyz":pose[0:4].tolist(),
                 "link":ee_linkname,
                 "timestep":i_step,
-                "pos_coeffs":[10,10,10],
-                "rot_coeffs":[10,10,10]
+                "pos_coeffs":[beta/n_steps]*3,
+                "rot_coeffs":[beta/n_steps]*3
              }
             })
 
     s = json.dumps(request)
-    with util.suppress_stdout():
-        prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
-        result = trajoptpy.OptimizeProblem(prob) # do optimization
+    prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
+    result = trajoptpy.OptimizeProblem(prob) # do optimization
+    print result.GetCosts()
+    print result.GetConstraints()
     traj = result.GetTraj()    
 
     saver = openravepy.RobotStateSaver(robot)
@@ -115,7 +116,7 @@ def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
     return H, f, A, N, z
 
 
-def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., bend_coef=.1, rot_coef = 1e-5, wt_n=None):
+def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta = 1., bend_coef=.1, rot_coef = 1e-5, wt_n=None):
     """
     The order of dof indices in hmats and traj should be the same as especified by manip_name
     """
@@ -139,18 +140,10 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
             "start_fixed" : False
         },
         "costs" : [
-        {
-            "type" : "joint_vel",
-            "params": {"coeffs" : [n_steps/5.]}
-        },
-        {
-            "type" : "collision",
-            "params" : {
-              "continuous" : True,
-              "coeffs" : [1],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
-              "dist_pen" : [0.01]  # robot-obstacle distance that penalty kicks in. expands to length n_timesteps
-            }
-        },
+#         {
+#             "type" : "joint_vel",
+#             "params": {"coeffs" : [n_steps/5.]}
+#         },
         {
             "type" : "tps",
             "name" : "tps",
@@ -160,9 +153,18 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                         "N" : [row.tolist() for row in N],
                         "alpha" : alpha,
             }
-        }
+        },
+        {
+            "type" : "collision",
+            "params" : {
+              "continuous" : True,
+              "coeffs" : [1000],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
+              "dist_pen" : [0.01]  # robot-obstacle distance that penalty kicks in. expands to length n_timesteps
+            }
+        },
         ],
-        "constraints" : [],
+        "constraints" : [
+        ],
     }
     
     init_trajs = []
@@ -178,32 +180,32 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
         
         poses = [openravepy.poseFromMatrix(hmat) for hmat in old_hmats]
         for (i_step,pose) in enumerate(poses):
-            if i_step != 0 and i_step != n_steps-1:
-                request["costs"].append(
-                    {"type":"tps_pose",
-                     "params":{
-                        "x_na":[row.tolist() for row in x_na],
-                        "N" : [row.tolist() for row in N],
-                        "xyz":pose[4:7].tolist(),
-                        "wxyz":pose[0:4].tolist(),
-                        "link":ee_linkname,
-                        "timestep":i_step,
-                        "pos_coeffs":[10,10,10],
-                        "rot_coeffs":[10,10,10]
-                     }
-                    })
-        for (i_step,hmat) in zip([0, n_steps-1], fn.transform_hmats(np.array([old_hmats[0], old_hmats[-1]]))):
-            pose = openravepy.poseFromMatrix(hmat)
-            request['constraints'].append(
-                {
-                    "type" : "pose", 
-                    "params" : {
-                        "xyz":pose[4:7].tolist(),
-                        "wxyz":pose[0:4].tolist(),
-                        "link": ee_linkname,
-                        "timestep" : i_step
-                    }
+#             if i_step != 0 or i_step != n_steps-1:
+            request["costs"].append(
+                {"type":"tps_pose",
+                 "params":{
+                    "x_na":[row.tolist() for row in x_na],
+                    "N" : [row.tolist() for row in N],
+                    "xyz":pose[4:7].tolist(),
+                    "wxyz":pose[0:4].tolist(),
+                    "link":ee_linkname,
+                    "timestep":i_step,
+                    "pos_coeffs":[beta/n_steps]*3,
+                    "rot_coeffs":[beta/n_steps]*3
+                 }
                 })
+#         for (i_step,hmat) in zip([0, n_steps-1], fn.transform_hmats(np.array([old_hmats[0], old_hmats[-1]]))):
+#             pose = openravepy.poseFromMatrix(hmat)
+#             request['constraints'].append(
+#                 {
+#                     "type" : "pose", 
+#                     "params" : {
+#                         "xyz":pose[4:7].tolist(),
+#                         "wxyz":pose[0:4].tolist(),
+#                         "link": ee_linkname,
+#                         "timestep" : i_step
+#                     }
+#                 })
     
     request['init_info'] = {
                                 "type":"given_traj",
@@ -214,6 +216,8 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     s = json.dumps(request)
     prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
     result = trajoptpy.OptimizeProblem(prob) # do optimization
+    print result.GetCosts()
+    print result.GetConstraints()
     traj = result.GetTraj()    
     
     saver = openravepy.RobotStateSaver(robot)

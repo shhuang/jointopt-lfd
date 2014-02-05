@@ -29,13 +29,11 @@ from itertools import combinations
 import IPython as ipy
 import random
 
-COLLISION_DIST_THRESHOLD = 0.01
+COLLISION_DIST_THRESHOLD = 0.0
 MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
 TRAJOPT_MAX_ACTIONS = 10  # Number of actions to compute full feature (TPS + TrajOpt) on
 ALPHA = 20
 BETA = 10
-
-
 
 def traj_collisions(traj, n=100):
     """
@@ -434,7 +432,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
                                                    alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
             redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
             tpsfulltrajs.append(tpsfulltraj)
-    
+
             dof_inds = []
             for manip_name in manip_names:
                 dof_inds.extend(Globals.robot.GetManipulator(manip_name).GetArmIndices())            
@@ -456,7 +454,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
     
-    return success, feasible, misgrasps, tpsfulltrajs
+    return success, feasible, misgrasp, tpsfulltrajs
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
@@ -588,6 +586,38 @@ def make_table_xml(translation, extents):
   </KinBody>
 </Environment>
 """ % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
+    return xml
+
+def make_box_xml(name, translation, extents):
+    xml = """
+<Environment>
+  <KinBody name="%s">
+    <Body type="dynamic" name="%s_link">
+      <Translation>%f %f %f</Translation>
+      <Geom type="box">
+        <extents>%f %f %f</extents>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (name, name, translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
+    return xml
+
+def make_cylinder_xml(name, translation, radius, height):
+    xml = """
+<Environment>
+  <KinBody name="%s">
+    <Body type="dynamic" name="%s_link">
+      <Translation>%f %f %f</Translation>
+      <Geom type="cylinder">
+        <rotationaxis>1 0 0 90</rotationaxis>
+        <radius>%f</radius>
+        <height>%f</height>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (name, name, translation[0], translation[1], translation[2], radius, height)
     return xml
 
 PR2_L_POSTURES = dict(
@@ -754,7 +784,9 @@ if __name__ == "__main__":
     table_xml = make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     Globals.env.LoadData(table_xml)
     if args.elbow_obstacle:
-        Globals.env.Load("data/bookshelves.env.xml")
+#         Globals.env.Load("data/bookshelves.env.xml")
+        Globals.env.LoadData(make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
+        Globals.env.LoadData(make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
 
     Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
     # create rope from rope in data
