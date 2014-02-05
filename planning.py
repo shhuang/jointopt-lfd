@@ -62,19 +62,27 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
     s = json.dumps(request)
     prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
     result = trajoptpy.OptimizeProblem(prob) # do optimization
-    pose_costs = 0
-    for (cost_type, cost_val) in result.GetCosts():
-        if cost_type == 'pose':
-            pose_costs += abs(cost_val)
     print result.GetCosts()
     print result.GetConstraints()
     traj = result.GetTraj()    
 
     saver = openravepy.RobotStateSaver(robot)
-    print "planned trajectory for %s. total pose error: %.3f."%(manip_name, pose_costs)
+    with robot:
+        pos_errs = []
+        for i_step in xrange(1,n_steps):
+            row = traj[i_step]
+            robot.SetDOFValues(row, arm_inds)
+            tf = ee_link.GetTransform()
+            pos = tf[:3,3]
+            pos_err = np.linalg.norm(poses[i_step][4:7] - pos)
+            pos_errs.append(pos_err)
+        pos_errs = np.array(pos_errs)
+        
+    print "planned trajectory for %s. max position error: %.3f. all position errors: %s"%(manip_name, pos_errs.max(), pos_errs)
 
     prob.SetRobotActiveDOFs() # set robot DOFs to DOFs in optimization problem
-    return traj, pose_costs
+        
+    return traj, pos_errs, traj_is_safe(result.GetTraj(), robot)
 
 
 def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
@@ -211,14 +219,23 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     print result.GetCosts()
     print result.GetConstraints()
     traj = result.GetTraj()    
-
-    tps_pose_costs = 0
-    for (cost_type, cost_val) in result.GetCosts():
-        if cost_type == 'tps' or cost_type == 'tps_pose':
-            tps_pose_costs += abs(cost_val)
-
+    
     saver = openravepy.RobotStateSaver(robot)
-    print "planned trajectory for %s. total tps and pose error: %.3f."%(manip_name, tps_pose_costs)
-
+    with robot:
+        pos_errs = []
+        for i_step in xrange(1,n_steps):
+            row = traj[i_step]
+            robot.SetDOFValues(row, arm_inds)
+            for ee_link in ee_links:
+                tf = ee_link.GetTransform()
+                pos = tf[:3,3]
+                pos_err = np.linalg.norm(poses[i_step][4:7] - pos)
+                pos_errs.append(pos_err)
+        pos_errs = np.array(pos_errs)
+    
+    print "planned trajectory for %s. max position error: %.3f. all position errors: %s"%(manip_name, pos_errs.max(), pos_errs)
+    
     prob.SetRobotActiveDOFs() # set robot DOFs to DOFs in optimization problem
-    return traj, tps_pose_costs
+    
+    return traj, pos_errs, traj_is_safe(result.GetTraj(), robot)
+

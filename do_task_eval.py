@@ -268,7 +268,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
             print "planning trajectory following"
             with util.suppress_stdout():
                 new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
-                                     Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = BETA)[0]
+                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)[0]
 
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
@@ -393,9 +393,10 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             with util.suppress_stdout():
                 new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
-                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = BETA)[0]
+                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs)[0]
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
+            ################################    
         redprint("Finished JOINT trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
         bodypart2trajs.append(bodypart2traj)
         
@@ -426,11 +427,9 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
                 hmat_seglist.append(new_ee_traj_rs)
                 old_trajs.append(bodypart2traj[part_name])
            
-            with util.suppress_stdout():
-                tpsfulltraj = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
+            tpsfulltraj, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                                    ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                                   alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)[0]
-            
+                                                   alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
             redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
             tpsfulltrajs.append(tpsfulltraj)
 
@@ -649,10 +648,10 @@ def follow_trajectory_cost(target_ee_traj, old_joint_traj, robot):
         ee_link_name = "%s_gripper_tool_frame"%lr
         ee_link = robot.GetLink(ee_link_name)
         with util.suppress_stdout():
-            traj, total_pose_err = planning.plan_follow_traj(robot, manip_name,
-                                   ee_link, target_ee_traj[lr], old_joint_traj[lr], beta = BETA)
+            traj, pos_errs, _ = planning.plan_follow_traj(robot, manip_name,
+                                   ee_link, target_ee_traj[lr], old_joint_traj[lr])
             feasible_trajs[lr] = traj
-            err += total_pose_err
+            err += np.mean(pos_errs)
     return feasible_trajs, err
 
 def regcost_feature_fn(state, action):
@@ -666,7 +665,7 @@ def regcost_trajopt_feature_fn(state, action):
     orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actions)
     feasible_trajs, err = follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
     return np.array([ALPHA*float(regcost) / get_ds_cloud(action).shape[0] + \
-                     BETA*float(err) / len(orig_joint_trajs.values()[0])])
+                     BETA*float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
 
 def regcost_trajopt_tps_feature_fn(state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
@@ -706,87 +705,9 @@ def regcost_trajopt_tps_feature_fn(state, action):
     regcost_scene_traj = registration_cost_cheap(new_pts_traj, demo_pts_traj)
     return np.array([float(regcost_scene_traj) / (new_pts_traj.shape[0])])
 
-def follow_tps_trajectory_cost(new_xyz, action, robot):
-    saver = openravepy.RobotStateSaver(robot)
-    reset_arms_to_side()
-    err = 0
-    feasible_trajs = {}
-
-    old_xyz = np.squeeze(action["cloud_xyz"])
-    old_xyz = clouds.downsample(old_xyz, DS_SIZE)
-    new_xyz = clouds.downsample(new_xyz, DS_SIZE)
-
-    link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
-    hmat_list = [(lr, action[ln]['hmat']) for lr, ln in zip('lr', lin_names)]
-    hmat_dict = dict(hmat_list)
-
-    scaled_xyz_src, src_params = registration.unit_boxify(old_xyz)
-    scaled_xyz_targ, targ_params = registration.unit_boxify(new_xyz)
-    f,g, xtarg_nd, bend_coef, wt_n, rot_coef = tps_registration.tps_rpm_bij(scaled_xyz_src, scaled_xyz_targ, plot_cb=None,
-                                   plotting=0, rot_reg=np.r_[1e-4, 1e-4, 1e-1], 
-                                   n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2,
-                                   x_weights=None)
-    f = registration.unscale_tps(f, src_params, targ_params)
-    unscaled_xtarg_nd = tps_registration.unscale_tps_points(xtarg_nd, targ_params[0], targ_params[1]) # should be close to new_xyz but with the same number of points as old_xyz
-
-    lr2eetraj = {}
-    for k, hmats in hmat_list:
-        lr2eetraj[k] = f.transform_hmats(hmats)
-
-    # figure out how we're gonna resample stuff
-    lr2oldtraj = {}
-    for lr in 'lr':
-        manip_name = {"l":"leftarm", "r":"rightarm"}[lr]                 
-        old_joint_traj = asarray(action[manip_name][:])
-        if arm_moved(old_joint_traj):       
-             lr2oldtraj[lr] = old_joint_traj   
-    if len(lr2oldtraj) > 0:
-        old_total_traj = np.concatenate(lr2oldtraj.values(), 1)
-        JOINT_LENGTH_PER_STEP = .1
-        _, timesteps_rs = unif_resample(old_total_traj, JOINT_LENGTH_PER_STEP)
-
-    ### Generate fullbody traj
-    bodypart2traj = {}
-    for (lr,old_joint_traj) in lr2oldtraj.items():
-        manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
-        old_joint_traj_rs = mu.interp2d(timesteps_rs, np.arange(len(old_joint_traj)), old_joint_traj)
-        ee_link_name = "%s_gripper_tool_frame"%lr
-        new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
-        new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
-        with util.suppress_stdout():
-            new_joint_traj = planning.plan_follow_traj(robot, manip_name, robot.GetLink(ee_link_name),
-                                 new_ee_traj_rs,old_joint_traj_rs, beta = BETA)[0]
-        part_name = {"l":"larm", "r":"rarm"}[lr]
-        bodypart2traj[part_name] = new_joint_traj
-        
-    assert len(bodypart2traj) > 0
-
-    manip_names = []
-    ee_links = []
-    hmat_seglist = []
-    old_trajs = []
-    for lr in [key[0] for key in sorted(bodypart2traj.keys())]:
-        part_name = {"l":"larm", "r":"rarm"}[lr]
-        manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
-        manip_names.append(manip_name)
-        ee_link_name = "%s_gripper_tool_frame"%lr
-        ee_links.append(robot.GetLink(ee_link_name))
-        new_ee_traj = hmat_dict[lr][i_start:i_end+1]
-        new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
-        hmat_seglist.append(new_ee_traj_rs)
-        old_trajs.append(bodypart2traj[part_name])
-
-    with util.suppress_stdout():
-        tpsfulltraj, tps_pose_err = planning.joint_fit_tps_follow_traj(robot, '+'.join(manip_names),
-                                        ee_links, fn, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                        alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
-    return tpsfulltraj, tps_pose_err
-
 def regcost_jointopt_feature_fn(state, action):
-    # Interfaces with the jointopt code to return a cost (corresponding to the value
-    # of the objective function)
-    tpsfulltraj, tps_pose_err = follow_tps_trajectory_cost(new_xyz, action, robot)
-    return np.array([tps_pose_err])
+    # TODO: Interface this with the jointopt code
+    print "NOT IMPLEMENTED YET"
 
 def get_links_to_exclude():
     links_to_exclude = []
@@ -989,7 +910,6 @@ if __name__ == "__main__":
                 best_root_action = agenda[0][1]
                 set_rope_transforms(rope_tf) # reset rope to initial state
                 success, feasible, misgrasp, trajs = simulate_demo_fn(new_xyz, Globals.actions[best_root_action], animate=args.animation)
-                ipy.embed()
                 if feasible:  # try next action if TrajOpt cannot find feasible action
                      found_feasible_action = True
                      break
@@ -1007,7 +927,6 @@ if __name__ == "__main__":
                 trajs_g = result_file[i_task][str(i_step)].create_group('trajs')
                 for (i_traj,traj) in enumerate(trajs):
                     traj_g = trajs_g.create_group(str(i_traj))
-                    #ipy.embed()
                     for (bodypart, bodyparttraj) in traj.iteritems():
                         traj_g[str(bodypart)] = bodyparttraj
                 result_file[i_task][str(i_step)]['values'] = q_values_root
