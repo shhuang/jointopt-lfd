@@ -32,6 +32,10 @@ import random
 COLLISION_DIST_THRESHOLD = 0.01
 MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
 TRAJOPT_MAX_ACTIONS = 10  # Number of actions to compute full feature (TPS + TrajOpt) on
+ALPHA = 20
+BETA = 10
+
+
 
 def traj_collisions(traj, n=100):
     """
@@ -42,9 +46,8 @@ def traj_collisions(traj, n=100):
     _ss = openravepy.RobotStateSaver(Globals.robot)
 
     cc = trajoptpy.GetCollisionChecker(Globals.env)
-    links_to_exclude = Globals.robot.GetLinks()
 
-    for link in links_to_exclude:
+    for link in get_links_to_exclude():
         for rope_link in Globals.env.GetKinBody('rope').GetLinks():
             cc.ExcludeCollisionPair(link, rope_link)
         cc.ExcludeCollisionPair(link, Globals.env.GetKinBody('table').GetLinks()[0])
@@ -152,7 +155,7 @@ def sim_traj_maybesim(bodypart2traj, animate=False, interactive=False):
         trajs.append(traj)
     full_traj = np.concatenate(trajs, axis=1)
     Globals.robot.SetActiveDOFs(dof_inds)
-    sim_full_traj_maybesim(full_traj, dof_inds, animate=animate, interactive=interactive)
+    return sim_full_traj_maybesim(full_traj, dof_inds, animate=animate, interactive=interactive)
 
 def sim_full_traj_maybesim(full_traj, dof_inds, animate=False, interactive=False):
     def sim_callback(i):
@@ -604,22 +607,84 @@ def reset_arms_to_side():
     Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]),
                                Globals.robot.GetManipulator("rightarm").GetArmIndices())
 
+def follow_trajectory_cost(target_ee_traj, old_joint_traj, robot):
+    # assumes that target_traj has already been resampled
+    reset_arms_to_side()
+    err = 0
+    feasible_trajs = {}
+    for lr in 'lr':
+        n_steps = len(target_ee_traj[lr])
+        manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
+        ee_link_name = "%s_gripper_tool_frame"%lr
+        ee_link = robot.GetLink(ee_link_name)
+        with util.suppress_stdout():
+            traj, pos_errs, _ = planning.plan_follow_traj(robot, manip_name,
+                                   ee_link, target_ee_traj[lr], old_joint_traj[lr])
+            feasible_trajs[lr] = traj
+            err += np.mean(pos_errs)
+    return feasible_trajs, err
+
 def regcost_feature_fn(state, action):
     regcost = registration_cost_cheap(state[1], get_ds_cloud(action))
-    return np.array([regcost])
+    return np.array([float(regcost) / get_ds_cloud(action).shape[0]])
    
 def regcost_trajopt_feature_fn(state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     regcost = registration_cost_cheap(state[1], get_ds_cloud(action))
     target_trajs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
     orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actions)
-    err = traj_utils.follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
-    return np.array([float(regcost) / get_ds_cloud(action).shape[0] + \
-                     float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
+    feasible_trajs, err = follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
+    return np.array([ALPHA*float(regcost) / get_ds_cloud(action).shape[0] + \
+                     BETA*float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
+
+def regcost_trajopt_tps_feature_fn(state, action):
+    link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
+    new_pts = state[1]
+    demo_pts = get_ds_cloud(action)
+
+    # TrajOpt 
+    target_trajs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
+    orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actions)
+    feasible_trajs, err = follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
+
+    saver = openravepy.RobotStateSaver(Globals.robot)
+
+    arm_inds = {}
+    ee_links = {}
+    manip_names = {"l":"leftarm", "r":"rightarm"}
+    for lr in 'lr':
+        arm_inds[lr] = Globals.robot.GetManipulator(manip_names[lr]).GetArmIndices()
+        ee_link_name = "%s_gripper_tool_frame"%lr
+        ee_links[lr] = Globals.robot.GetLink(ee_link_name)
+
+    # Add trajectory positions to new_pts and demo_pts, before calling registration_cost_cheap
+    orig_traj_positions = []
+    feasible_traj_positions = []
+    for lr in 'lr': 
+        for i_step in range(orig_joint_trajs[lr].shape[0]):
+            Globals.robot.SetDOFValues(orig_joint_trajs[lr][i_step], arm_inds[lr])
+            tf = ee_links[lr].GetTransform()
+            orig_traj_positions.append(tf[:3,3])
+            Globals.robot.SetDOFValues(feasible_trajs[lr][i_step], arm_inds[lr])
+            tf = ee_links[lr].GetTransform()
+            feasible_traj_positions.append(tf[:3,3])
+
+    new_pts_traj = np.r_[new_pts, np.array(feasible_traj_positions)]
+    demo_pts_traj = np.r_[demo_pts, np.array(orig_traj_positions)]
+
+    regcost_scene_traj = registration_cost_cheap(new_pts_traj, demo_pts_traj)
+    return np.array([float(regcost_scene_traj) / (new_pts_traj.shape[0])])
 
 def regcost_jointopt_feature_fn(state, action):
     # TODO: Interface this with the jointopt code
     print "NOT IMPLEMENTED YET"
+
+def get_links_to_exclude():
+    links_to_exclude = []
+    for link in Globals.robot.GetLinks():
+        if 'gripper' in link.GetName():
+            links_to_exclude.append(link)
+    return links_to_exclude
 
 ###################
 
@@ -642,7 +707,7 @@ if __name__ == "__main__":
     
     parser.add_argument('actionfile', nargs='?', default='data/misc/actions.h5')
     parser.add_argument('holdoutfile', nargs='?', default='data/misc/holdout_set.h5')
-    parser.add_argument('warpingcost', choices=['regcost', 'regcost-trajopt', 'jointopt'])
+    parser.add_argument('warpingcost', choices=['regcost', 'regcost-trajopt', 'regcost-trajopt-tps', 'jointopt'])
     parser.add_argument("--resultfile", type=str) # don't save results if this is not specified
     parser.add_argument('--ensemble', action='store_true')
     parser.add_argument("--animation", type=int, default=0)
@@ -699,9 +764,8 @@ if __name__ == "__main__":
     reset_arms_to_side()
 
     cc = trajoptpy.GetCollisionChecker(Globals.env)
-    links_to_exclude = Globals.robot.GetLinks()
 
-    for link in links_to_exclude:
+    for link in get_links_to_exclude():
         for rope_link in Globals.env.GetKinBody('rope').GetLinks():
             cc.ExcludeCollisionPair(link, rope_link)
         cc.ExcludeCollisionPair(link, Globals.env.GetKinBody('table').GetLinks()[0])
@@ -722,6 +786,8 @@ if __name__ == "__main__":
         feature_fn = regcost_feature_fn
     elif args.warpingcost == "regcost-trajopt":
         feature_fn = regcost_trajopt_feature_fn
+    elif args.warpingcost == "regcost-trajopt-tps":
+        feature_fn = regcost_trajopt_tps_feature_fn
     else:
         feature_fn = jointopt_feature_fn
 
@@ -793,15 +859,23 @@ if __name__ == "__main__":
 
             for i_choice in range(num_actions_to_try):
                 redprint("Choosing an action")
-                q_values = [q_value_fn(state, action) for action in Globals.actions]
-                q_values_root = q_values
+                infeasible_set = set()
                 rope_tf = get_rope_transforms()
 
-                infeasible_set = set()
-                agenda = sorted(zip(q_values, Globals.actions), key = lambda v: -v[0])
-                agenda = [(v, a, rope_tf, a) for (v, a) in agenda if a not in infeasible_set][:args.lookahead_width] # state is (value, most recent action, rope_transforms, root action)
+                q_values_regcost = [(q_value_fn_regcost(state, action), action) for action in Globals.actions]
+                agenda = sorted(q_values_regcost, key = lambda v: -v[0])
+                agenda_top_actions = [(v, a) for (v, a) in agenda if a not in infeasible_set][:TRAJOPT_MAX_ACTIONS]
 
-                best_root_action = agenda[0][-1]
+                if args.warpingcost != "regcost":
+                    q_values = [(q_value_fn(state, a), a) for (v, a) in agenda_top_actions]
+                    agenda = sorted(q_values, key = lambda v: -v[0])
+                else:
+                    q_values = q_values_regcost
+                    agenda = agenda_top_actions
+
+                q_values_root = [q for (q, a) in q_values][:TRAJOPT_MAX_ACTIONS]
+
+                best_root_action = agenda[0][1]
                 set_rope_transforms(rope_tf) # reset rope to initial state
                 success, feasible, misgrasp, trajs = simulate_demo_fn(new_xyz, Globals.actions[best_root_action], animate=args.animation)
                 if feasible:  # try next action if TrajOpt cannot find feasible action
