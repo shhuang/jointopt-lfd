@@ -431,7 +431,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
            
             tpsfulltraj, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                                    ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                                   alpha=1.0, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+                                                   alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
             redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
             tpsfulltrajs.append(tpsfulltraj)
     
