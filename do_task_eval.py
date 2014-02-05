@@ -151,7 +151,7 @@ def sim_traj_maybesim(bodypart2traj, animate=False, interactive=False):
         trajs.append(traj)
     full_traj = np.concatenate(trajs, axis=1)
     Globals.robot.SetActiveDOFs(dof_inds)
-    sim_full_traj_maybesim(full_traj, dof_inds, animate=animate, interactive=interactive)
+    return sim_full_traj_maybesim(full_traj, dof_inds, animate=animate, interactive=interactive)
 
 def sim_full_traj_maybesim(full_traj, dof_inds, animate=False, interactive=False):
     def sim_callback(i):
@@ -582,6 +582,38 @@ def make_table_xml(translation, extents):
 """ % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
     return xml
 
+def make_box_xml(name, translation, extents):
+    xml = """
+<Environment>
+  <KinBody name="%s">
+    <Body type="dynamic" name="%s_link">
+      <Translation>%f %f %f</Translation>
+      <Geom type="box">
+        <extents>%f %f %f</extents>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (name, name, translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
+    return xml
+
+def make_cylinder_xml(name, translation, radius, height):
+    xml = """
+<Environment>
+  <KinBody name="%s">
+    <Body type="dynamic" name="%s_link">
+      <Translation>%f %f %f</Translation>
+      <Geom type="cylinder">
+        <rotationaxis>1 0 0 90</rotationaxis>
+        <radius>%f</radius>
+        <height>%f</height>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (name, name, translation[0], translation[1], translation[2], radius, height)
+    return xml
+
 PR2_L_POSTURES = dict(
     untucked = [0.4,  1.0,   0.0,  -2.05,  0.0,  -0.1,  0.0],
     tucked = [0.06, 1.25, 1.79, -1.68, -1.73, -0.10, -0.09],
@@ -686,6 +718,8 @@ if __name__ == "__main__":
     Globals.env.LoadData(table_xml)
     if args.elbow_obstacle:
         Globals.env.Load("data/bookshelves.env.xml")
+#         Globals.env.LoadData(make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
+#         Globals.env.LoadData(make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
 
     Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
     # create rope from rope in data
