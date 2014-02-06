@@ -202,7 +202,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                     "link":ee_linkname,
                     "timestep":i_step,
                     "pos_coeffs":[beta/n_steps]*3,
-                    "rot_coeffs":[beta/n_steps]*3
+                    "rot_coeffs":[0.1 * beta/n_steps]*3
                  }
                 })
 #         for (i_step,hmat) in zip([0], fn.transform_hmats(np.array([old_hmats[0]]))):

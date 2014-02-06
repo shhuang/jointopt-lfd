@@ -766,7 +766,6 @@ def follow_tps_trajectory_cost(new_xyz, action):
                                  new_ee_traj_rs,old_joint_traj_rs, beta = BETA)[0]
         part_name = {"l":"larm", "r":"rarm"}[lr]
         bodypart2traj[part_name] = new_joint_traj
-        ipy.embed()
          
     assert len(bodypart2traj) > 0
 
