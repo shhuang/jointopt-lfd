@@ -34,8 +34,8 @@ import random
 COLLISION_DIST_THRESHOLD = 0.0
 MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
 TRAJOPT_MAX_ACTIONS = 10  # Number of actions to compute full feature (TPS + TrajOpt) on
-ALPHA = 20.0
-BETA = 10.0
+alpha = 20.0  # alpha and beta can be set by user parameters - but should be changed nowhere else
+beta = 10.0
 
 def traj_collisions(traj, n=100):
     """
@@ -437,7 +437,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
            
             tpsfulltraj, f_new, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                                    ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                                   alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+                                                   alpha=alpha, beta=beta, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
             handles = []
             handles.append(Globals.env.plot3(old_xyz,5, (1,0,0)))
             handles.append(Globals.env.plot3(new_xyz,5, (0,0,1)))
@@ -678,8 +678,8 @@ def regcost_trajopt_feature_fn(state, action):
     target_trajs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
     orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actions)
     feasible_trajs, err = follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
-    return np.array([ALPHA*float(regcost) / get_ds_cloud(action).shape[0] + \
-                     BETA*float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
+    return np.array([alpha*float(regcost) / get_ds_cloud(action).shape[0] + \
+                     beta*float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
 
 def regcost_trajopt_tps_feature_fn(state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
@@ -788,7 +788,7 @@ def follow_tps_trajectory_cost(new_xyz, action):
 
     tpsfulltraj, tps_pose_err = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                         ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                        alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+                                        alpha=alpha, beta=beta, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
 
     return tpsfulltraj, tps_pose_err
  
@@ -837,6 +837,8 @@ if __name__ == "__main__":
     parser.add_argument("--elbow_obstacle", action="store_true")
     parser.add_argument("--jointopt", action="store_true")
     parser.add_argument("--search_until_feasible", action="store_true")
+    parser.add_argument("--alpha", type=int, default=20)
+    parser.add_argument("--beta", type=int, default=10)
     
     parser.add_argument("--tasks", nargs='+', type=int)
     parser.add_argument("--taskfile", type=str)
@@ -852,6 +854,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.random_seed is not None: np.random.seed(args.random_seed)
+
+    # alpha and beta should not be changed anywhere else!
+    alpha = args.alpha
+    beta = args.beta
 
     trajoptpy.SetInteractive(args.interactive)
 
