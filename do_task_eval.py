@@ -13,12 +13,6 @@ from rapprentice import math_utils as mu
 from rapprentice.yes_or_no import yes_or_no
 import pdb, time
 
-try:
-    from rapprentice import pr2_trajectories, PR2
-    import rospy
-except ImportError:
-    print "Couldn't import ros stuff"
-
 import cloudprocpy, trajoptpy, openravepy
 import util
 from rope_qlearn import *
