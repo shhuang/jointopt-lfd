@@ -322,12 +322,13 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
     redprint("Generating end-effector trajectory")    
     
     handles = []
-    old_xyz = np.squeeze(seg_info["cloud_xyz"])
-#     handles.append(Globals.env.plot3(old_xyz,5, (1,0,0)))
-#     handles.append(Globals.env.plot3(new_xyz,5, (0,0,1)))
     
+    old_xyz = np.squeeze(seg_info["cloud_xyz"])
     old_xyz = clouds.downsample(old_xyz, DS_SIZE)
     new_xyz = clouds.downsample(new_xyz, DS_SIZE)
+
+    handles.append(Globals.env.plot3(old_xyz,5, (1,0,0)))
+    handles.append(Globals.env.plot3(new_xyz,5, (0,0,1)))
 
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
@@ -346,8 +347,14 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
                                    n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2,
                                    x_weights=None)
     f = registration.unscale_tps(f, src_params, targ_params)
+    handles.append(Globals.env.plot3(f.transform_points(old_xyz),5, (0,1,0)))
     unscaled_xtarg_nd = tps_registration.unscale_tps_points(xtarg_nd, targ_params[0], targ_params[1]) # should be close to new_xyz but with the same number of points as old_xyz
 
+    grid_means = .5 * (old_xyz.max(axis=0) + old_xyz.min(axis=0))
+    grid_mins = grid_means - (old_xyz.max(axis=0) - old_xyz.min(axis=0))
+    grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
+    handles.extend(plotting_openrave.draw_grid(Globals.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (1,1,0,1)))
+    
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -427,9 +434,15 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
                 hmat_seglist.append(new_ee_traj_rs)
                 old_trajs.append(bodypart2traj[part_name])
            
-            tpsfulltraj, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
+            tpsfulltraj, f_new, _, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                                    ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
                                                    alpha=ALPHA, beta=BETA, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+            handles = []
+            handles.append(Globals.env.plot3(old_xyz,5, (1,0,0)))
+            handles.append(Globals.env.plot3(new_xyz,5, (0,0,1)))
+            handles.append(Globals.env.plot3(f_new.transform_points(old_xyz),5, (0,1,0)))
+            handles.extend(plotting_openrave.draw_grid(Globals.env, f_new.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (0,1,1,1)))
+
             redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
             tpsfulltrajs.append(tpsfulltraj)
 
@@ -893,7 +906,7 @@ if __name__ == "__main__":
                 redprint("Choosing an action")
                 infeasible_set = set()
                 rope_tf = get_rope_transforms()
-
+                
                 q_values_regcost = [(q_value_fn_regcost(state, action), action) for action in Globals.actions]
                 agenda = sorted(q_values_regcost, key = lambda v: -v[0])
                 agenda_top_actions = [(v, a) for (v, a) in agenda if a not in infeasible_set][:TRAJOPT_MAX_ACTIONS]
