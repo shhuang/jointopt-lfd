@@ -269,7 +269,7 @@ def simulate_demo(new_xyz, seg_info, animate=False):
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             print "planning trajectory following"
             new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
-                                                       Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta=BETA)[0]
+                                                       Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta=beta)[0]
 
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
@@ -401,7 +401,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             with util.suppress_stdout():
                 new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
-                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = BETA)[0]
+                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = beta)[0]
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
             ################################    
@@ -663,7 +663,7 @@ def follow_trajectory_cost(target_ee_traj, old_joint_traj, robot):
         ee_link = robot.GetLink(ee_link_name)
         with util.suppress_stdout():
             traj, pos_errs = planning.plan_follow_traj(robot, manip_name,
-                                   ee_link, target_ee_traj[lr], old_joint_traj[lr], beta = BETA)
+                                   ee_link, target_ee_traj[lr], old_joint_traj[lr], beta = beta)
             feasible_trajs[lr] = traj
             err += pos_errs
     return feasible_trajs, err
@@ -765,7 +765,7 @@ def follow_tps_trajectory_cost(new_xyz, action):
         new_ee_traj = lr2eetraj[lr][:]
         new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
         new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name, Globals.robot.GetLink(ee_link_name),
-                                 new_ee_traj_rs,old_joint_traj_rs, beta = BETA)[0]
+                                 new_ee_traj_rs,old_joint_traj_rs, beta = beta)[0]
         part_name = {"l":"larm", "r":"rarm"}[lr]
         bodypart2traj[part_name] = new_joint_traj
          
