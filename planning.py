@@ -2,6 +2,7 @@ import openravepy,trajoptpy, numpy as np, json
 import util
 from trajoptpy.check_traj import traj_is_safe
 from rapprentice import tps
+from rapprentice.registration import ThinPlateSpline
 import IPython as ipy
 
 def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.):
@@ -113,7 +114,7 @@ def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
     
     z = np.linalg.solve(2.0*N.T.dot(H.dot(N)), -N.T.dot(f))
     
-    return H, f, A, N, z
+    return H, f, A, N, z, wt_n, rot_coefs
 
 
 def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta = 1., bend_coef=.1, rot_coef = 1e-5, wt_n=None):
@@ -122,7 +123,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     """
     
     (n,d) = x_na.shape
-    H, f, A, N, z = prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n)
+    H, f, A, N, z, wt_n, rot_coefs = prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n)
     
     n_steps = len(old_hmats_list[0])
     
@@ -148,10 +149,14 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
             "type" : "tps",
             "name" : "tps",
             "params" : {"H" : [row.tolist() for row in H],
-                        "f" : f.tolist(),
+                        "f" : [row.tolist() for row in f],
                         "x_na" : [row.tolist() for row in x_na],
                         "N" : [row.tolist() for row in N],
+                        "y_ng" : [row.tolist() for row in y_ng],
+                        "wt_n" : wt_n.tolist(),
+                        "rot_coef" : rot_coefs.tolist(),
                         "alpha" : alpha,
+                        "lambda" : bend_coef,
             }
         },
         {
@@ -180,7 +185,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
         
         poses = [openravepy.poseFromMatrix(hmat) for hmat in old_hmats]
         for (i_step,pose) in enumerate(poses):
-#             if i_step != 0 or i_step != n_steps-1:
+#             if i_step != 0:
             request["costs"].append(
                 {"type":"tps_pose",
                  "params":{
@@ -194,7 +199,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                     "rot_coeffs":[beta/n_steps]*3
                  }
                 })
-#         for (i_step,hmat) in zip([0, n_steps-1], fn.transform_hmats(np.array([old_hmats[0], old_hmats[-1]]))):
+#         for (i_step,hmat) in zip([0], fn.transform_hmats(np.array([old_hmats[0]]))):
 #             pose = openravepy.poseFromMatrix(hmat)
 #             request['constraints'].append(
 #                 {
@@ -218,7 +223,13 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     result = trajoptpy.OptimizeProblem(prob) # do optimization
     print result.GetCosts()
     print result.GetConstraints()
-    traj = result.GetTraj()    
+    traj = result.GetTraj()
+    theta = N.dot(result.GetExt())
+    f = ThinPlateSpline()
+    f.trans_g = theta[0,:];
+    f.lin_ag = theta[1:d+1,:];
+    f.w_ng = theta[d+1:];
+    f.x_na = x_na
     
     saver = openravepy.RobotStateSaver(robot)
     with robot:
@@ -237,5 +248,5 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     
     prob.SetRobotActiveDOFs() # set robot DOFs to DOFs in optimization problem
     
-    return traj, pos_errs, traj_is_safe(result.GetTraj(), robot)
-
+    # f is the warping function
+    return traj, f, pos_errs, traj_is_safe(result.GetTraj(), robot)
