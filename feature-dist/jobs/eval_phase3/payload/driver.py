@@ -21,7 +21,7 @@ if __name__ == '__main__':
         logname = os.path.join(logdir, nameonly + '.txt')
         errname = os.path.join(logdir, nameonly + '.err')
         outname = os.path.join(outdir, nameonly)
-        subprocesses.append(subprocess.Popen('python do_task_eval.py --elbow_obstacle --animation 0 --resultfile={} data/misc/actions.h5 {} regcost-trajopt'.format(outname, fname),
+        subprocesses.append(subprocess.Popen('python do_task_eval.py --elbow_obstacle --animation 0 --search_until_feasible --resultfile={} data/misc/actions.h5 {} regcost-trajopt'.format(outname, fname),
                             stdout=open(logname, 'w'),
                             stderr=open(errname, 'w'),
                             shell=True))

@@ -29,8 +29,8 @@ servers:
 
   - host: rll7.eecs.berkeley.edu
     path: comp/eval_phase3
-    cores: 7
+    cores: 5
 
   - host: primus.banatao.berkeley.edu
     path: comp/eval_phase3
-    cores: 7
+    cores: 5
