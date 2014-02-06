@@ -978,11 +978,14 @@ if __name__ == "__main__":
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
             found_feasible_action = False
 
+            action_elapsed_time = 0
+            exec_elapsed_time = 0
             for i_choice in range(num_actions_to_try):
                 redprint("Choosing an action")
                 infeasible_set = set()
                 rope_tf = get_rope_transforms()
                 
+                start_time = time.time()
                 q_values_regcost = [(q_value_fn_regcost(state, action), action) for action in Globals.actions]
                 agenda = sorted(q_values_regcost, key = lambda v: -v[0])
                 agenda_top_actions = [(v, a) for (v, a) in agenda if a not in infeasible_set][:TRAJOPT_MAX_ACTIONS]
@@ -997,8 +1000,14 @@ if __name__ == "__main__":
                 q_values_root = [q for (q, a) in q_values][:TRAJOPT_MAX_ACTIONS]
 
                 best_root_action = agenda[0][1]
+                action_elapsed_time += time.time() - start_time
+
                 set_rope_transforms(rope_tf) # reset rope to initial state
+                
+                start_time = time.time()
                 success, feasible, misgrasp, trajs = simulate_demo_fn(new_xyz, Globals.actions[best_root_action], animate=args.animation)
+                exec_elapsed_time += time.time() - start_time
+
                 if feasible:  # try next action if TrajOpt cannot find feasible action
                      found_feasible_action = True
                      break
@@ -1023,6 +1032,8 @@ if __name__ == "__main__":
                     except:
                         traj_g['arm'] = traj
                 result_file[i_task][str(i_step)]['values'] = q_values_root
+                result_file[i_task][str(i_step)]['action_time'] = action_elapsed_time
+                result_file[i_task][str(i_step)]['exec_time'] = exec_elapsed_time
 
             if not found_feasible_action:
                 # Skip to next knot tie if the action is infeasible -- since

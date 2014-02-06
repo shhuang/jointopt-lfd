@@ -225,8 +225,9 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                            }
     
     s = json.dumps(request)
-    prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
-    result = trajoptpy.OptimizeProblem(prob) # do optimization
+    with util.suppress_stdout():
+        prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
+        result = trajoptpy.OptimizeProblem(prob) # do optimization
     print result.GetCosts()
     print result.GetConstraints()
     traj = result.GetTraj()
