@@ -980,32 +980,32 @@ if __name__ == "__main__":
 
             action_elapsed_time = 0
             exec_elapsed_time = 0
-            infeasible_set = set()
             feasible = True
             misgrasp = False
+
+            redprint("Choosing an action")
+            trajopt_actions = max(num_actions_to_try, TRAJOPT_MAX_ACTIONS)
+
+            rope_tf = get_rope_transforms()
+            start_time = time.time()
+            q_values_regcost = [(q_value_fn_regcost(state, action), action) for action in Globals.actions]
+            agenda = sorted(q_values_regcost, key = lambda v: -v[0])
+            agenda_top_actions = [(v, a) for (v, a) in agenda][:TRAJOPT_MAX_ACTIONS]
+
+            if args.warpingcost != "regcost":
+                q_values = [(q_value_fn(state, a), a) for (v, a) in agenda_top_actions]
+                agenda = sorted(q_values, key = lambda v: -v[0])
+            else:
+                q_values = q_values_regcost
+                agenda = agenda_top_actions
+            action_elapsed_time += time.time() - start_time
+            q_values_root = [q for (q, a) in q_values][:TRAJOPT_MAX_ACTIONS]
+
+            set_rope_transforms(rope_tf) # reset rope to initial state
+
             for i_choice in range(num_actions_to_try):
-                redprint("Choosing an action")
-                rope_tf = get_rope_transforms()
                 
-                start_time = time.time()
-                q_values_regcost = [(q_value_fn_regcost(state, action), action) for action in Globals.actions]
-                agenda = sorted(q_values_regcost, key = lambda v: -v[0])
-                agenda_top_actions = [(v, a) for (v, a) in agenda if a not in infeasible_set][:TRAJOPT_MAX_ACTIONS]
-
-                if args.warpingcost != "regcost":
-                    q_values = [(q_value_fn(state, a), a) for (v, a) in agenda_top_actions]
-                    agenda = sorted(q_values, key = lambda v: -v[0])
-                else:
-                    q_values = q_values_regcost
-                    agenda = agenda_top_actions
-
-                q_values_root = [q for (q, a) in q_values][:TRAJOPT_MAX_ACTIONS]
-
                 best_root_action = agenda[0][1]
-                action_elapsed_time += time.time() - start_time
-
-                set_rope_transforms(rope_tf) # reset rope to initial state
-                
                 start_time = time.time()
                 success, feasible, misgrasp, trajs = simulate_demo_fn(new_xyz, Globals.actions[best_root_action], animate=args.animation)
                 exec_elapsed_time += time.time() - start_time
@@ -1014,7 +1014,8 @@ if __name__ == "__main__":
                      found_feasible_action = True
                      break
                 else:
-                     infeasible_set.add(best_root_action)
+                     redprint('TRYING NEXT ACTION')
+                     agenda = agenda[1:]
 
             #print "BEST ACTION:", best_root_action
             set_rope_transforms(get_rope_transforms())

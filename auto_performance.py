@@ -26,9 +26,9 @@ def estimate_performance(results_file):
         for i_step in range(len(task_info)):
             step_info = task_info[str(i_step)]
             try:
-                if step_info['misgrasp']:
+                if step_info['misgrasp'][()]:
                     misgrasp = True
-                if step_info['infeasible']:
+                if step_info['infeasible'][()]:
                     infeasible = True
             except:
                 misgrasps_logged = False
@@ -39,15 +39,18 @@ def estimate_performance(results_file):
                 rope_nodes = step_info
             
             if isKnot(rope_nodes):
-                num_knots += 1
                 knot_exists = True
                 break
 
             try:
-                action_time += step_info['action_time']
-                exec_time += step_info['exec_time']
+                action_time += step_info['action_time'][()]
+                exec_time += step_info['exec_time'][()]
             except:
                 timing_logged = False
+
+        if infeasible and knot_exists:
+            print 'infeasible but ended up in knot'
+            knot_exists = False
 
         if not knot_exists:
             if infeasible:
@@ -55,13 +58,16 @@ def estimate_performance(results_file):
             elif misgrasp:
                 num_misgrasps += 1
             print i_task
+
+        if knot_exists:
+            num_knots += 1
     
     if misgrasps_logged:
         print "# Misgrasps:", num_misgrasps
         print "# Infeasible:", num_infeasible
     if timing_logged:
-        print "Time taken to choose demo:", action_time
-        print "Time taken to warp and execute demo:", exec_time
+        print "Time taken to choose demo:", action_time, "seconds"
+        print "Time taken to warp and execute demo:", exec_time, "seconds"
     return float(num_knots)/len(results_file)
 
 if __name__ == '__main__':
