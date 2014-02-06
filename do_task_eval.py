@@ -980,9 +980,11 @@ if __name__ == "__main__":
 
             action_elapsed_time = 0
             exec_elapsed_time = 0
+            infeasible_set = set()
+            feasible = True
+            misgrasp = False
             for i_choice in range(num_actions_to_try):
                 redprint("Choosing an action")
-                infeasible_set = set()
                 rope_tf = get_rope_transforms()
                 
                 start_time = time.time()
