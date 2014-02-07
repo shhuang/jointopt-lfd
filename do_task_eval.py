@@ -26,6 +26,7 @@ import IPython as ipy
 import random
 
 COLLISION_DIST_THRESHOLD = 0.0
+TWOSTEP_TRAJ_DIFF_THRESHOLD = 0.1  # TODO: Alex: Set this to a reasonable number
 MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
 TRAJOPT_MAX_ACTIONS = 10  # Number of actions to compute full feature (TPS + TrajOpt) on
 alpha = 20.0  # alpha and beta can be set by user parameters - but should be changed nowhere else
@@ -384,6 +385,7 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
         ### Generate fullbody traj
         bodypart2traj = {}
         redprint("Optimizing JOINT trajectory for part %i"%i_miniseg)
+        total_pose_costs = 0
         for (lr,old_joint_traj) in lr2oldtraj.items():
             
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
@@ -394,14 +396,15 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             with util.suppress_stdout():
-                new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name,
-                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = beta)[0]
+                new_joint_traj, pose_costs = planning.plan_follow_traj(Globals.robot, manip_name,
+                                                           Globals.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = beta)
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
+            total_pose_costs += pose_costs
             ################################    
         redprint("Finished JOINT trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
         bodypart2trajs.append(bodypart2traj)
-        
+
         for lr in 'lr':
             gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
             prev_gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
@@ -411,6 +414,26 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
                 misgrasp = True
 
         if not success: break
+
+        # Execute the trajectory from 2-Step if total_pose_cost is less than the threshold
+        if total_pose_cost < TWOSTEP_TRAJ_DIFF_THRESHOLD:
+            if len(bodypart2traj) > 0:
+                dof_inds = []
+                trajs = []
+                for (part_name, traj) in bodypart2traj.items():
+                    manip_name = {"larm":"leftarm","rarm":"rightarm"}[part_name]
+                    dof_inds.extend(Globals.robot.GetManipulator(manip_name).GetArmIndices())            
+                    trajs.append(traj)
+                full_traj = np.concatenate(trajs, axis=1)
+                Globals.robot.SetActiveDOFs(dof_inds)
+                if not traj_is_safe(full_traj):
+                    redprint("Trajectory not feasible")
+                    success = False
+                    feasible = False
+                    break
+
+                success &= sim_traj_maybesim(bodypart2traj, animate=animate)
+            break
         
         if len(bodypart2traj) > 0:
             manip_names = []
@@ -752,18 +775,25 @@ def follow_tps_trajectory_cost(new_xyz, action):
 
     ### Generate fullbody traj
     bodypart2traj = {}
+    total_pose_cost = 0
     for (lr,old_joint_traj) in lr2oldtraj.items():
         manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
         old_joint_traj_rs = mu.interp2d(timesteps_rs, np.arange(len(old_joint_traj)), old_joint_traj)
         ee_link_name = "%s_gripper_tool_frame"%lr
         new_ee_traj = lr2eetraj[lr][:]
         new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
-        new_joint_traj = planning.plan_follow_traj(Globals.robot, manip_name, Globals.robot.GetLink(ee_link_name),
-                                 new_ee_traj_rs,old_joint_traj_rs, beta = beta)[0]
+        new_joint_traj, pose_costs = planning.plan_follow_traj(Globals.robot, manip_name, Globals.robot.GetLink(ee_link_name),
+                                 new_ee_traj_rs,old_joint_traj_rs, beta = beta)
         part_name = {"l":"larm", "r":"rarm"}[lr]
         bodypart2traj[part_name] = new_joint_traj
          
     assert len(bodypart2traj) > 0
+
+    if total_pose_cost < TWOSTEP_TRAJ_DIFF_THRESHOLD:
+        # Return TPS-TrajOpt feature
+        regcost = registration_cost_cheap(new_xyz, get_ds_cloud(action))
+        return np.array([alpha*float(regcost) / get_ds_cloud(action).shape[0] + \  #TODO: Alex
+                         total_pose_cost])
 
     manip_names = []
     ee_links = []
@@ -780,17 +810,16 @@ def follow_tps_trajectory_cost(new_xyz, action):
         hmat_seglist.append(new_ee_traj_rs)
         old_trajs.append(bodypart2traj[part_name])
 
-    tpsfulltraj, tps_pose_err = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
+    tpsfulltraj, _, tps_pose_err, _ = planning.joint_fit_tps_follow_traj(Globals.robot, '+'.join(manip_names),
                                         ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
                                         alpha=alpha, beta=beta, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
 
-    return tpsfulltraj, tps_pose_err
+    return np.array([tps_pose_err])  #TODO: Alex
  
 def jointopt_feature_fn(state, action):
     # Interfaces with the jointopt code to return a cost (corresponding to the value
     # of the objective function)
-    tpsfulltraj, tps_pose_err = follow_tps_trajectory_cost(new_xyz, Globals.actions[action])
-    return np.array([tps_pose_err])
+    return follow_tps_trajectory_cost(new_xyz, Globals.actions[action])
 
 def get_links_to_exclude():
     links_to_exclude = []
@@ -1022,7 +1051,7 @@ if __name__ == "__main__":
                      redprint('TRYING NEXT ACTION')
                      agenda = agenda[1:]
 
-            #print "BEST ACTION:", best_root_action
+            print "BEST ACTION:", best_root_action
             set_rope_transforms(get_rope_transforms())
             
             if save_results:
