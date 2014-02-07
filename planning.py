@@ -57,7 +57,7 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
                 "link":ee_linkname,
                 "timestep":i_step,
                 "pos_coeffs":[beta/n_steps]*3,
-                "rot_coeffs":[beta/n_steps]*3
+                "rot_coeffs":[0.1 * beta/n_steps]*3
              }
             })
 
@@ -239,13 +239,19 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     f.x_na = x_na
     
     saver = openravepy.RobotStateSaver(robot)
-    tps_pose_costs = 0
+    tps_cost = 0
+    tps_pose_cost = 0
     for (cost_type, cost_val) in result.GetCosts():
-        if cost_type == 'tps' or cost_type == 'tps_pose':
-            tps_pose_costs += abs(cost_val)
+        if cost_type == 'tps':
+            tps_cost += cost_val
+        elif cost_type == 'tps_pose':
+            tps_pose_cost += cost_val
 
-    print "planned trajectory for %s. total tps and pose error: %.3f."%(manip_name, tps_pose_costs) 
+    print "planned trajectory for %s. tps cost %.3f and tps pose error: %.3f."%(manip_name, tps_cost, tps_pose_cost) 
     prob.SetRobotActiveDOFs() # set robot DOFs to DOFs in optimization problem
+
+#     tps_costs is the same as 
+#     (alpha/x_na.shape[0])*(np.linalg.norm(np.sqrt(wt_n)[:,None]*(f.transform_points(x_na) - y_ng))**2 + bend_coef*((f.w_ng.T.dot(K_nn.dot(f.w_ng))).trace()) + f.lin_ag.T.dot(np.diag(rot_coefs).dot(f.lin_ag)).trace() - (np.diag(rot_coefs).dot(f.lin_ag.T)).trace())
     
     # f is the warping function
-    return traj, f, tps_pose_costs, traj_is_safe(result.GetTraj(), robot)
+    return traj, f, tps_cost, tps_pose_cost, traj_is_safe(result.GetTraj(), robot)
