@@ -960,6 +960,11 @@ if __name__ == "__main__":
             if i_task in result_file:
                 del result_file[i_task]
             result_file.create_group(i_task)
+            result_file[i_task].create_group('init')
+            trans, rots = get_rope_transforms()
+            result_file[i_task]['init']['rope_nodes'] = rope_nodes
+            result_file[i_task]['init']['trans'] = trans
+            result_file[i_task]['init']['rots'] = rots
         
         for i_step in range(args.num_steps):
             print "task %s step %i" % (i_task, i_step)
@@ -1025,6 +1030,9 @@ if __name__ == "__main__":
                 result_file[i_task][str(i_step)]['misgrasp'] = 1 if misgrasp else 0
                 result_file[i_task][str(i_step)]['infeasible'] = 1 if not feasible else 0
                 result_file[i_task][str(i_step)]['rope_nodes'] = Globals.sim.rope.GetControlPoints()
+                trans, rots = get_rope_transforms()
+                result_file[i_task][str(i_step)]['trans'] = trans
+                result_file[i_task][str(i_step)]['rots'] = rots
                 result_file[i_task][str(i_step)]['best_action'] = str(best_root_action)
                 trajs_g = result_file[i_task][str(i_step)].create_group('trajs')
                 for (i_traj,traj) in enumerate(trajs):
