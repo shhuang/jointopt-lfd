@@ -668,12 +668,14 @@ def regcost_feature_fn(state, action):
    
 def regcost_trajopt_feature_fn(state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
-    regcost = registration_cost_cheap(state[1], get_ds_cloud(action))
-    target_trajs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
+#     regcost = registration_cost_cheap(state[1], get_ds_cloud(action))
+    target_trajs, regcost, warped_rope_xyzs = warp_hmats(get_ds_cloud(action), state[1],[(lr, Globals.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)
+    
     orig_joint_trajs = traj_utils.joint_trajs(action, Globals.actions)
     feasible_trajs, err = follow_trajectory_cost(target_trajs, orig_joint_trajs, Globals.robot)
-    return np.array([alpha*float(regcost) / get_ds_cloud(action).shape[0] + \
-                     beta*float(err) / len(orig_joint_trajs.values()[0])])  # TODO: Consider regcost + C*err
+    # don't rescale by alpha and beta
+    # rescaling by 1/beta bc cost has beta/n_steps in it
+    return np.array([float(regcost) / get_ds_cloud(action).shape[0] + float(err)/float(beta)])  # TODO: Consider regcost + C*err
 
 def regcost_trajopt_tps_feature_fn(state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
@@ -709,9 +711,7 @@ def regcost_trajopt_tps_feature_fn(state, action):
 
     new_pts_traj = np.r_[new_pts, np.array(feasible_traj_positions)]
     demo_pts_traj = np.r_[demo_pts, np.array(orig_traj_positions)]
-
-    regcost_scene_traj = registration_cost_cheap(new_pts_traj, demo_pts_traj)
-    return np.array([float(regcost_scene_traj) / (new_pts_traj.shape[0])])
+    return np.array([registration_cost(new_pts_traj, demo_pts_traj)[4]])
 
 def follow_tps_trajectory_cost(new_xyz, action):
     #saver = openravepy.RobotStateSaver(Globals.robot)
