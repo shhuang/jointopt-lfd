@@ -23,7 +23,7 @@ def estimate_performance(results_file):
         infeasible = False
         misgrasp = False
 
-        for i_step in range(len(task_info)):
+        for i_step in range(len(task_info) - (1 if 'init' in task_info else 0)):
             step_info = task_info[str(i_step)]
             try:
                 if step_info['misgrasp'][()]:
