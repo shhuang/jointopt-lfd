@@ -505,14 +505,14 @@ def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     return success
 
 def replace_rope(new_rope):
-    import bulletsimpy
     old_rope_nodes = Globals.sim.rope.GetControlPoints()
-    if Globals.viewer:
-        Globals.viewer.RemoveKinBody(Globals.env.GetKinBody('rope'))
-    Globals.env.Remove(Globals.env.GetKinBody('rope'))
-    Globals.sim.bt_env.Remove(Globals.sim.bt_env.GetObjectByName('rope'))
-    Globals.sim.rope = bulletsimpy.CapsuleRope(Globals.sim.bt_env, 'rope', new_rope,
-                                               Globals.sim.rope_params)
+    rope_kin_body = Globals.env.GetKinBody('rope')
+    if rope_kin_body:
+        Globals.env.Remove(rope_kin_body)
+    if Globals.sim:
+        del Globals.sim
+    Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
+    Globals.sim.create(new_rope)
     return old_rope_nodes
 
 def get_rope_transforms():
@@ -962,7 +962,7 @@ if __name__ == "__main__":
             result_file.create_group(i_task)
             result_file[i_task].create_group('init')
             trans, rots = get_rope_transforms()
-            result_file[i_task]['init']['rope_nodes'] = rope_nodes
+            result_file[i_task]['init']['rope_nodes'] = Globals.sim.rope.GetControlPoints()
             result_file[i_task]['init']['trans'] = trans
             result_file[i_task]['init']['rots'] = rots
         
