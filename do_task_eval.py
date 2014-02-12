@@ -202,8 +202,7 @@ def sample_rope_state(demofile, human_check=True, perturb_points=5, min_rad=0, m
 DS_SIZE = .025
 
 def simulate_demo(new_xyz, seg_info, animate=False):
-    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
-    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
+    reset_arms_to_side()
     
     redprint("Generating end-effector trajectory")    
     
@@ -221,7 +220,8 @@ def simulate_demo(new_xyz, seg_info, animate=False):
         interest_pts = get_closing_pts(seg_info)
     else:
         interest_pts = None
-    lr2eetraj = warp_hmats(old_xyz, new_xyz, hmat_list, interest_pts)[0]
+    lr2eetraj, _, old_xyz_warped = warp_hmats(old_xyz, new_xyz, hmat_list, interest_pts)
+    handles.append(Globals.env.plot3(old_xyz_warped,5, (0,1,0)))
 
     miniseg_starts, miniseg_ends = split_trajectory_by_gripper(seg_info)    
     success = True
@@ -292,27 +292,23 @@ def simulate_demo(new_xyz, seg_info, animate=False):
             Globals.robot.SetActiveDOFs(dof_inds)
             if not traj_is_safe(full_traj):
                 redprint("Trajectory not feasible")
-                success = False
-                feasible = False
-                break
+                feasible = False # do not break even if trajectory is not feasible
 
             success &= sim_traj_maybesim(bodypart2traj, animate=animate)
 
         if not success: break
 
     Globals.sim.settle(animate=animate)
-    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
-    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
-    if animate:
-        Globals.viewer.Step()
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
+    reset_arms_to_side()
+    if animate:
+        Globals.viewer.Step()
     
     return success, feasible, misgrasp, bodypart2trajs
 
 def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
-    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
-    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
+    reset_arms_to_side()
     
     redprint("Generating end-effector trajectory")    
     
@@ -447,26 +443,22 @@ def simulate_demo_jointopt(new_xyz, seg_info, animate=False):
             Globals.robot.SetActiveDOFs(dof_inds)
             if not traj_is_safe(tpsfulltraj):
                 redprint("Trajectory not feasible")
-                success = False
-                feasible = False
-                break
+                feasible = False # do not break even if trajectory is not feasible
             success &= sim_full_traj_maybesim(tpsfulltraj, dof_inds, animate=animate)
 
         if not success: break
 
     Globals.sim.settle(animate=animate)
-    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
-    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
-    if animate:
-        Globals.viewer.Step()
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
+    reset_arms_to_side()
+    if animate:
+        Globals.viewer.Step()
     
     return success, feasible, misgrasp, tpsfulltrajs
 
 def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
-    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
-    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
+    reset_arms_to_side()
     
     handles = []
     old_xyz = np.squeeze(seg_info["cloud_xyz"])
@@ -496,24 +488,27 @@ def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
         if not success: break
 
     Globals.sim.settle(animate=animate)
-    Globals.robot.SetDOFValues(PR2_L_POSTURES["side"], Globals.robot.GetManipulator("leftarm").GetArmIndices())
-    Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]), Globals.robot.GetManipulator("rightarm").GetArmIndices())
-
     Globals.sim.release_rope('l')
     Globals.sim.release_rope('r')
-    
+    reset_arms_to_side()
+    if animate:
+        Globals.viewer.Step()
+
     return success
 
 def replace_rope(new_rope):
-    old_rope_nodes = Globals.sim.rope.GetControlPoints()
     rope_kin_body = Globals.env.GetKinBody('rope')
+    if Globals.sim:
+        for lr in 'lr':
+            Globals.sim.release_rope(lr)
     if rope_kin_body:
+        if Globals.viewer:
+            Globals.viewer.RemoveKinBody(rope_kin_body)
         Globals.env.Remove(rope_kin_body)
     if Globals.sim:
         del Globals.sim
     Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
     Globals.sim.create(new_rope)
-    return old_rope_nodes
 
 def get_rope_transforms():
     return (Globals.sim.rope.GetTranslations(), Globals.sim.rope.GetRotations())    
@@ -521,6 +516,36 @@ def get_rope_transforms():
 def set_rope_transforms(tfs):
     Globals.sim.rope.SetTranslations(tfs[0])
     Globals.sim.rope.SetRotations(tfs[1])
+
+class RopeSimTimeMachine(object):
+    """
+    Sets and tracks the state of the rope in a consistent manner.
+    Keeps track of the state of the rope at user-defined checkpoints and allows 
+    for restoring from that checkpoint in a deterministic manner (i.e. calling
+    time_machine.restore_from_checkpoint(id) should restore the same simulation
+    state everytime it is called)
+    """
+    def __init__(self, new_rope):
+        """
+        new_rope is the initial rope_nodes of the machine for a particular task
+        """
+        self.rope_nodes = new_rope
+        self.checkpoints = {}
+        replace_rope(self.rope_nodes)
+        Globals.sim.settle()
+        
+    def set_checkpoint(self, id):
+        if id in self.checkpoints:
+            raise RuntimeError("Can not set checkpoint with id %s since it has already been set"%id)
+        self.checkpoints[id] = get_rope_transforms()
+        self.restore_from_checkpoint(id)
+
+    def restore_from_checkpoint(self, id):
+        if id not in self.checkpoints:
+            raise RuntimeError("Can not restore checkpoint with id %s since it has not been set"%id)
+        replace_rope(self.rope_nodes)
+        set_rope_transforms(self.checkpoints[id])
+        Globals.sim.settle()
 
 def arm_moved(joint_traj):    
     if len(joint_traj) < 2: return False
@@ -644,6 +669,12 @@ def reset_arms_to_side():
     #actionfile = None
     Globals.robot.SetDOFValues(mirror_arm_joints(PR2_L_POSTURES["side"]),
                                Globals.robot.GetManipulator("rightarm").GetArmIndices())
+    mult = 5
+    open_angle = .08 * mult
+    for lr in 'lr':
+        joint_ind = Globals.robot.GetJoint("%s_gripper_l_finger_joint"%lr).GetDOFIndex()
+        start_val = Globals.robot.GetDOFValues([joint_ind])[0]
+        Globals.robot.SetDOFValues([open_angle], [joint_ind])
 
 def follow_trajectory_cost(target_ee_traj, old_joint_traj, robot):
     # assumes that target_traj has already been resampled
@@ -885,7 +916,6 @@ if __name__ == "__main__":
     reset_arms_to_side()
 
     cc = trajoptpy.GetCollisionChecker(Globals.env)
-
     for link in get_links_to_exclude():
         for rope_link in Globals.env.GetKinBody('rope').GetLinks():
             cc.ExcludeCollisionPair(link, rope_link)
@@ -946,12 +976,16 @@ if __name__ == "__main__":
     num_total = 0
 
     for i_task, demo_id_rope_nodes in (holdoutfile.iteritems() if not tasks else [(unicode(t),holdoutfile[unicode(t)]) for t in tasks]):
+        print "task %s" % i_task
+
         reset_arms_to_side()
 
         redprint("Replace rope")
         rope_nodes = demo_id_rope_nodes["rope_nodes"][:]
-        replace_rope(rope_nodes)
-        Globals.sim.settle()
+
+        # don't replace_rope and sim.settle() directly. use time machine interface for deterministic results!
+        time_machine = RopeSimTimeMachine(rope_nodes)
+        
         if args.animation:
             Globals.viewer.Step()
 
@@ -970,14 +1004,12 @@ if __name__ == "__main__":
             print "task %s step %i" % (i_task, i_step)
 
             reset_arms_to_side()
-
+            
             redprint("Observe point cloud")
             new_xyz = Globals.sim.observe_cloud()
             state = ("eval_%i"%get_unique_id(), new_xyz)
     
-
-            Globals.sim.observe_cloud()
-            if is_knot(Globals.sim.observe_cloud()):
+            if is_knot(new_xyz):
                 break;
 
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
@@ -991,7 +1023,6 @@ if __name__ == "__main__":
             redprint("Choosing an action")
             trajopt_actions = max(num_actions_to_try, TRAJOPT_MAX_ACTIONS)
 
-            rope_tf = get_rope_transforms()
             start_time = time.time()
             q_values_regcost = [(q_value_fn_regcost(state, action), action) for action in Globals.actions]
             agenda = sorted(q_values_regcost, key = lambda v: -v[0])
@@ -1006,10 +1037,9 @@ if __name__ == "__main__":
             action_elapsed_time += time.time() - start_time
             q_values_root = [q for (q, a) in q_values][:TRAJOPT_MAX_ACTIONS]
 
-            set_rope_transforms(rope_tf) # reset rope to initial state
-
+            time_machine.set_checkpoint('prechoice_%i'%i_step)
             for i_choice in range(num_actions_to_try):
-                
+                time_machine.restore_from_checkpoint('prechoice_%i'%i_step)
                 best_root_action = agenda[0][1]
                 start_time = time.time()
                 success, feasible, misgrasp, trajs = simulate_demo_fn(new_xyz, Globals.actions[best_root_action], animate=args.animation)
@@ -1022,8 +1052,7 @@ if __name__ == "__main__":
                      redprint('TRYING NEXT ACTION')
                      agenda = agenda[1:]
 
-            #print "BEST ACTION:", best_root_action
-            set_rope_transforms(get_rope_transforms())
+            print "BEST ACTION:", best_root_action
             
             if save_results:
                 result_file[i_task].create_group(str(i_step))

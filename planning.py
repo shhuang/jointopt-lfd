@@ -69,11 +69,11 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
     print result.GetConstraints()
     traj = result.GetTraj()    
 
-    saver = openravepy.RobotStateSaver(robot)
     pose_costs = 0
     for (cost_type, cost_val) in result.GetCosts():
         if cost_type == 'pose':
             pose_costs += abs(cost_val)
+    #saver = openravepy.RobotStateSaver(robot)
     #with robot:
     #    pos_errs = []
     #    for i_step in xrange(1,n_steps):
@@ -238,7 +238,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     f.w_ng = theta[d+1:];
     f.x_na = x_na
     
-    saver = openravepy.RobotStateSaver(robot)
+    #saver = openravepy.RobotStateSaver(robot)
     tps_pose_costs = 0
     for (cost_type, cost_val) in result.GetCosts():
         if cost_type == 'tps' or cost_type == 'tps_pose':
