@@ -41,11 +41,6 @@ def traj_collisions(traj, n=100):
 
     cc = trajoptpy.GetCollisionChecker(Globals.env)
 
-    for link in get_links_to_exclude():
-        for rope_link in Globals.env.GetKinBody('rope').GetLinks():
-            cc.ExcludeCollisionPair(link, rope_link)
-        cc.ExcludeCollisionPair(link, Globals.env.GetKinBody('table').GetLinks()[0])
-    
     col_times = []
     for (i,row) in enumerate(traj_up):
         Globals.robot.SetActiveDOFValues(row)
@@ -180,24 +175,6 @@ def load_random_start_segment(demofile):
     start_keys = [k for k in demofile.keys() if k.startswith('demo') and k.endswith('00')]
     seg_name = random.choice(start_keys)
     return demofile[seg_name]['cloud_xyz']
-
-def sample_rope_state(demofile, human_check=True, perturb_points=5, min_rad=0, max_rad=.15):
-    success = False
-    while not success:
-        # TODO: pick a random rope initialization
-        new_xyz= load_random_start_segment(demofile)
-        perturb_radius = random.uniform(min_rad, max_rad)
-        rope_nodes = rope_initialization.find_path_through_point_cloud( new_xyz,
-                                                                        perturb_peak_dist=perturb_radius,
-                                                                        num_perturb_points=perturb_points)
-        replace_rope(rope_nodes)
-        Globals.sim.settle()
-        Globals.viewer.Step()
-        if human_check:
-            resp = raw_input("Use this simulation?[Y/n]")
-            success = resp not in ('N', 'n')
-        else:
-            success = True
 
 DS_SIZE = .025
 
@@ -497,14 +474,13 @@ def simulate_demo_traj(new_xyz, seg_info, bodypart2trajs, animate=False):
     return success
 
 def replace_rope(new_rope):
-    rope_kin_body = Globals.env.GetKinBody('rope')
     if Globals.sim:
         for lr in 'lr':
             Globals.sim.release_rope(lr)
+    rope_kin_body = Globals.env.GetKinBody('rope')
     if rope_kin_body:
         if Globals.viewer:
             Globals.viewer.RemoveKinBody(rope_kin_body)
-        Globals.env.Remove(rope_kin_body)
     if Globals.sim:
         del Globals.sim
     Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
@@ -823,13 +799,6 @@ def jointopt_feature_fn(state, action):
     tpsfulltraj, tps_pose_err = follow_tps_trajectory_cost(new_xyz, Globals.actions[action])
     return np.array([tps_pose_err])
 
-def get_links_to_exclude():
-    links_to_exclude = []
-    for link in Globals.robot.GetLinks():
-        if 'gripper' in link.GetName():
-            links_to_exclude.append(link)
-    return links_to_exclude
-
 ###################
 
 class Globals:
@@ -908,19 +877,12 @@ if __name__ == "__main__":
         #Globals.env.LoadData(make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
         #Globals.env.LoadData(make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
 
-    Globals.sim = ropesim.Simulation(Globals.env, Globals.robot)
-    # create rope from rope in data
-    rope_nodes = rope_initialization.find_path_through_point_cloud(init_rope_xyz)
-    Globals.sim.create(rope_nodes)
-    # move arms to the side
-    reset_arms_to_side()
-
     cc = trajoptpy.GetCollisionChecker(Globals.env)
-    for link in get_links_to_exclude():
-        for rope_link in Globals.env.GetKinBody('rope').GetLinks():
-            cc.ExcludeCollisionPair(link, rope_link)
-        cc.ExcludeCollisionPair(link, Globals.env.GetKinBody('table').GetLinks()[0])
+    for gripper_link in [link for link in Globals.robot.GetLinks() if 'gripper' in link.GetName()]:
+        cc.ExcludeCollisionPair(gripper_link, Globals.env.GetKinBody('table').GetLinks()[0])
 
+    reset_arms_to_side()
+    
     if args.animation:
         Globals.viewer = trajoptpy.GetViewer(Globals.env)
         print "move viewer to viewpoint that isn't stupid"
