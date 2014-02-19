@@ -239,13 +239,16 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     f.x_na = x_na
     
     #saver = openravepy.RobotStateSaver(robot)
-    tps_pose_costs = 0
+    tps_cost = 0
+    pose_costs = 0
     for (cost_type, cost_val) in result.GetCosts():
-        if cost_type == 'tps' or cost_type == 'tps_pose':
-            tps_pose_costs += abs(cost_val)
+        if cost_type == "tps":
+            tps_cost += abs(cost_val)
+        elif cost_type == "tps_pose":
+            pose_costs += abs(cost_val)
 
-    print "planned trajectory for %s. total tps and pose error: %.3f."%(manip_name, tps_pose_costs) 
+    print "planned trajectory for %s. tps error: %.3f. total pose error: %.3f."%(manip_name, tps_cost, pose_costs)
     prob.SetRobotActiveDOFs() # set robot DOFs to DOFs in optimization problem
     
     # f is the warping function
-    return traj, f, tps_pose_costs, traj_is_safe(result.GetTraj(), robot)
+    return traj, f, tps_cost, pose_costs, traj_is_safe(result.GetTraj(), robot)
