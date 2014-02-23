@@ -7,6 +7,8 @@ from rapprentice.registration import ThinPlateSpline
 import IPython as ipy
 
 def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.):
+    orig_dof_inds = robot.GetActiveDOFIndices()
+    orig_dof_vals = robot.GetDOFValues()
         
     n_steps = len(new_hmats)
     assert old_traj.shape[0] == n_steps
@@ -17,7 +19,6 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
     ee_linkname = ee_link.GetName()
     
     init_traj = old_traj.copy()
-    #init_traj[0] = robot.GetDOFValues(arm_inds)
 
     request = {
         "basic_info" : {
@@ -62,9 +63,10 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
             })
 
     s = json.dumps(request)
-    with util.suppress_stdout():
-        prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
-        result = trajoptpy.OptimizeProblem(prob) # do optimization
+    with openravepy.RobotStateSaver(robot):
+        with util.suppress_stdout():
+            prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
+            result = trajoptpy.OptimizeProblem(prob) # do optimization
     print result.GetCosts()
     print result.GetConstraints()
     traj = result.GetTraj()    
@@ -73,8 +75,7 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
     for (cost_type, cost_val) in result.GetCosts():
         if cost_type == 'pose':
             pose_costs += abs(cost_val)
-    #saver = openravepy.RobotStateSaver(robot)
-    #with robot:
+    #with openravepy.RobotStateSaver(robot):
     #    pos_errs = []
     #    for i_step in xrange(1,n_steps):
     #        row = traj[i_step]
@@ -87,8 +88,10 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
 
     print "planned trajectory for %s. total pose error: %.3f."%(manip_name, pose_costs)
 
-    prob.SetRobotActiveDOFs() # set robot DOFs to DOFs in optimization problem
-        
+    # make sure this function doesn't change state of the robot
+    assert not np.any(orig_dof_inds - robot.GetActiveDOFIndices())
+    assert not np.any(orig_dof_vals - robot.GetDOFValues())
+    
     return traj, pose_costs
 
 
@@ -127,6 +130,8 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     """
     The order of dof indices in hmats and traj should be the same as especified by manip_name
     """
+    orig_dof_inds = robot.GetActiveDOFIndices()
+    orig_dof_vals = robot.GetDOFValues()
     
     (n,d) = x_na.shape
     H, f, A, N, z, wt_n, rot_coefs = prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n)
@@ -225,9 +230,10 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                            }
     
     s = json.dumps(request)
-    with util.suppress_stdout():
-        prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
-        result = trajoptpy.OptimizeProblem(prob) # do optimization
+    with openravepy.RobotStateSaver(robot):
+        with util.suppress_stdout():
+            prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
+            result = trajoptpy.OptimizeProblem(prob) # do optimization
     print result.GetCosts()
     print result.GetConstraints()
     traj = result.GetTraj()
@@ -238,7 +244,6 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     f.w_ng = theta[d+1:];
     f.x_na = x_na
     
-    #saver = openravepy.RobotStateSaver(robot)
     tps_cost = 0
     pose_costs = 0
     for (cost_type, cost_val) in result.GetCosts():
@@ -248,7 +253,10 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
             pose_costs += abs(cost_val)
 
     print "planned trajectory for %s. tps error: %.3f. total pose error: %.3f."%(manip_name, tps_cost, pose_costs)
-    prob.SetRobotActiveDOFs() # set robot DOFs to DOFs in optimization problem
     
+    # make sure this function doesn't change state of the robot
+    assert not np.any(orig_dof_inds - robot.GetActiveDOFIndices())
+    assert not np.any(orig_dof_vals - robot.GetDOFValues())
+
     # f is the warping function
-    return traj, f, tps_cost, pose_costs, traj_is_safe(result.GetTraj(), robot)
+    return traj, f, tps_cost, pose_costs

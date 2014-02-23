@@ -25,6 +25,53 @@ class SimulationEnv:
         self.log = None
         self.viewer = None
 
+def make_table_xml(translation, extents):
+    xml = """
+<Environment>
+  <KinBody name="table">
+    <Body type="static" name="table_link">
+      <Geom type="box">
+        <Translation>%f %f %f</Translation>
+        <extents>%f %f %f</extents>
+        <diffuseColor>.96 .87 .70</diffuseColor>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
+    return xml
+
+def make_box_xml(name, translation, extents):
+    xml = """
+<Environment>
+  <KinBody name="%s">
+    <Body type="dynamic" name="%s_link">
+      <Translation>%f %f %f</Translation>
+      <Geom type="box">
+        <extents>%f %f %f</extents>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (name, name, translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
+    return xml
+
+def make_cylinder_xml(name, translation, radius, height):
+    xml = """
+<Environment>
+  <KinBody name="%s">
+    <Body type="dynamic" name="%s_link">
+      <Translation>%f %f %f</Translation>
+      <Geom type="cylinder">
+        <rotationaxis>1 0 0 90</rotationaxis>
+        <radius>%f</radius>
+        <height>%f</height>
+      </Geom>
+    </Body>
+  </KinBody>
+</Environment>
+""" % (name, name, translation[0], translation[1], translation[2], radius, height)
+    return xml
 
 def reset_arms_to_side(sim_env):
     sim_env.robot.SetDOFValues(PR2_L_POSTURES["side"],
@@ -75,7 +122,7 @@ def set_gripper_maybesim(sim_env, lr, is_open, prev_is_open):
     closed_angle = .02 * mult
 
     target_val = open_angle if is_open else closed_angle
-
+    
     # release constraints if necessary
     if is_open and not prev_is_open:
         sim_env.sim.release_rope(lr)
@@ -121,40 +168,52 @@ def unwrap_in_place(t):
         raise NotImplementedError
 
 def sim_traj_maybesim(sim_env, bodypart2traj, animate=False, interactive=False):
-    dof_inds = []
-    trajs = []
-    for (part_name, traj) in bodypart2traj.items():
-        manip_name = {"larm":"leftarm","rarm":"rightarm"}[part_name]
-        dof_inds.extend(sim_env.robot.GetManipulator(manip_name).GetArmIndices())            
-        trajs.append(traj)
-    full_traj = np.concatenate(trajs, axis=1)
-    sim_env.robot.SetActiveDOFs(dof_inds)
-    return sim_full_traj_maybesim(sim_env, full_traj, dof_inds, animate=animate, interactive=interactive)
+    full_traj = getFullTraj(sim_env, bodypart2traj)
+    return sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive)
 
-def sim_full_traj_maybesim(sim_env, full_traj, dof_inds, animate=False, interactive=False):
+def sim_full_traj_maybesim(sim_env, full_traj, animate=False, interactive=False):
     def sim_callback(i):
         sim_env.sim.step()
 
     animate_speed = 10 if animate else 0
 
+    traj, dof_inds = full_traj
+
     # make the trajectory slow enough for the simulation
-    full_traj = ropesim.retime_traj(sim_env.robot, dof_inds, full_traj)
+    traj = ropesim.retime_traj(sim_env.robot, dof_inds, traj)
 
     # in simulation mode, we must make sure to gradually move to the new starting position
+    sim_env.robot.SetActiveDOFs(dof_inds)
     curr_vals = sim_env.robot.GetActiveDOFValues()
-    transition_traj = np.r_[[curr_vals], [full_traj[0]]]
+    transition_traj = np.r_[[curr_vals], [traj[0]]]
     unwrap_in_place(transition_traj)
     transition_traj = ropesim.retime_traj(sim_env.robot, dof_inds, transition_traj, max_cart_vel=.05)
     animate_traj.animate_traj(transition_traj, sim_env.robot, restore=False, pause=interactive,
         callback=sim_callback, step_viewer=animate_speed)
-    full_traj[0] = transition_traj[-1]
-    unwrap_in_place(full_traj)
+    traj[0] = transition_traj[-1]
+    unwrap_in_place(traj)
 
-    animate_traj.animate_traj(full_traj, sim_env.robot, restore=False, pause=interactive,
+    animate_traj.animate_traj(traj, sim_env.robot, restore=False, pause=interactive,
         callback=sim_callback, step_viewer=animate_speed)
     if sim_env.viewer:
         sim_env.viewer.Step()
     return True
+
+def getFullTraj(sim_env, bodypart2traj):
+    """
+    A full trajectory is a tuple of a trajectory (np matrix) and dof indices (list)
+    """
+    if len(bodypart2traj) > 0:
+        trajs = []
+        dof_inds = []
+        for (part_name, traj) in bodypart2traj.items():
+            manip_name = {"larm":"leftarm","rarm":"rightarm"}[part_name]
+            trajs.append(traj)
+            dof_inds.extend(sim_env.robot.GetManipulator(manip_name).GetArmIndices())            
+        full_traj = (np.concatenate(trajs, axis=1), dof_inds)
+    else:
+        full_traj = (np.zeros((0,0)), [])
+    return full_traj
 
 def load_random_start_segment(demofile):
     start_keys = [k for k in demofile.keys() if k.startswith('demo') and k.endswith('00')]
@@ -253,7 +312,7 @@ class RopeSimTimeMachine(object):
         set_rope_transforms(self.checkpoints[id], sim_env)
         sim_env.sim.settle()
 
-def simulate_demo_traj(sim_env, new_xyz, seg_info, bodypart2trajs, animate=False):
+def simulate_demo_traj(sim_env, new_xyz, seg_info, bodypart2trajs, animate=False, interactive=False):
     reset_arms_to_side(sim_env)
     
     handles = []
@@ -279,7 +338,7 @@ def simulate_demo_traj(sim_env, new_xyz, seg_info, bodypart2trajs, animate=False
         if not success: break
 
         if len(bodypart2traj) > 0:
-            success &= sim_util.sim_traj_maybesim(sim_env, bodypart2traj, animate=animate)
+            success &= sim_util.sim_traj_maybesim(sim_env, bodypart2traj, animate=animate, interactive=interactive)
 
         if not success: break
 

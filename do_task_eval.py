@@ -44,17 +44,13 @@ def get_ds_cloud(sim_env, action):
 def redprint(msg):
     print colorize.colorize(msg, "red", bold=True)
 
-def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, simulate=True):
+def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=False, simulate=True):
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
     
     redprint("Generating end-effector trajectory")    
     
-    handles = []
     old_xyz = np.squeeze(seg_info["cloud_xyz"])
-    handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-    handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
-    
     old_xyz = clouds.downsample(old_xyz, DS_SIZE)
     new_xyz = clouds.downsample(new_xyz, DS_SIZE)
     
@@ -65,14 +61,19 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, simulate=True)
     else:
         interest_pts = None
     lr2eetraj, _, old_xyz_warped = warp_hmats(old_xyz, new_xyz, hmat_list, interest_pts)
-    handles.append(sim_env.env.plot3(old_xyz_warped,5, (0,1,0)))
+
+    handles = []
+    if animate:
+        handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
+        handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
+        handles.append(sim_env.env.plot3(old_xyz_warped,5, (0,1,0)))
 
     miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
     success = True
     feasible = True
     misgrasp = False
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
-    bodypart2trajs = []
+    full_trajs = []
 
     trajopt_err = 0
     total_time_steps = 0
@@ -118,7 +119,8 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, simulate=True)
             bodypart2traj[part_name] = new_joint_traj
             ################################    
             redprint("Executing joint trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
-        bodypart2trajs.append(bodypart2traj)
+        full_traj = sim_util.getFullTraj(sim_env, bodypart2traj)
+        full_trajs.append(full_traj)
         if not simulate:
             continue
 
@@ -132,21 +134,13 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, simulate=True)
 
         if not success: break
 
-        if len(bodypart2traj) > 0:
-            dof_inds = []
-            trajs = []
-            for (part_name, traj) in bodypart2traj.items():
-                manip_name = {"larm":"leftarm","rarm":"rightarm"}[part_name]
-                dof_inds.extend(sim_env.robot.GetManipulator(manip_name).GetArmIndices())            
-                trajs.append(traj)
-            full_traj = np.concatenate(trajs, axis=1)
-            sim_env.robot.SetActiveDOFs(dof_inds)
+        if len(full_traj[0]) > 0:
             if not eval_util.traj_is_safe(sim_env, full_traj, COLLISION_DIST_THRESHOLD):
                 redprint("Trajectory not feasible")
-                feasible = False # do not break even if trajectory is not feasible
+                feasible = False
                 success = False
             else:  # Only execute feasible trajectories
-                success &= sim_util.sim_traj_maybesim(sim_env, bodypart2traj, animate=animate)
+                success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive)
 
         if not success: break
 
@@ -160,22 +154,17 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, simulate=True)
     if animate:
         sim_env.viewer.Step()
     
-    return success, feasible, misgrasp, bodypart2trajs
+    return success, feasible, misgrasp, full_trajs
 
-def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, simulate=True):
+def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, interactive=False, simulate=True):
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
     
     redprint("Generating end-effector trajectory")    
     
-    handles = []
-    
     old_xyz = np.squeeze(seg_info["cloud_xyz"])
     old_xyz = clouds.downsample(old_xyz, DS_SIZE)
     new_xyz = clouds.downsample(new_xyz, DS_SIZE)
-
-    handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-    handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
 
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
@@ -194,13 +183,17 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, simul
                                    n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2,
                                    x_weights=None)
     f = registration.unscale_tps(f, src_params, targ_params)
-    handles.append(sim_env.env.plot3(f.transform_points(old_xyz),5, (0,1,0)))
     unscaled_xtarg_nd = tps_registration.unscale_tps_points(xtarg_nd, targ_params[0], targ_params[1]) # should be close to new_xyz but with the same number of points as old_xyz
 
-    grid_means = .5 * (old_xyz.max(axis=0) + old_xyz.min(axis=0))
-    grid_mins = grid_means - (old_xyz.max(axis=0) - old_xyz.min(axis=0))
-    grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
-    handles.extend(plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (1,1,0,1)))
+    handles = []
+    if animate:
+        handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
+        handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
+        handles.append(sim_env.env.plot3(f.transform_points(old_xyz),5, (0,1,0)))
+        grid_means = .5 * (old_xyz.max(axis=0) + old_xyz.min(axis=0))
+        grid_mins = grid_means - (old_xyz.max(axis=0) - old_xyz.min(axis=0))
+        grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
+        handles.extend(plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (1,1,0,1)))
     
     lr2eetraj = {}
     for k, hmats in hmat_list:
@@ -211,8 +204,7 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, simul
     success = True
     feasible = True
     misgrasp = False
-    bodypart2trajs = []
-    tpsfulltrajs = []
+    full_trajs = []
     total_tps_cost = 0
     total_pose_cost = 0
     total_time_steps = 0
@@ -238,7 +230,7 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, simul
 
         ### Generate fullbody traj
         bodypart2traj = {}
-        redprint("Optimizing JOINT trajectory for part %i"%i_miniseg)
+        redprint("Optimizing JOINT ANGLE trajectory for part %i"%i_miniseg)
         for (lr,old_joint_traj) in lr2oldtraj.items():
             
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
@@ -254,26 +246,17 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, simul
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
             ################################    
-        redprint("Finished JOINT trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
-        bodypart2trajs.append(bodypart2traj)
-
-        if simulate:
-            for lr in 'lr':
-                gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
-                prev_gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
-                if not sim_util.set_gripper_maybesim(sim_env, lr, gripper_open, prev_gripper_open):
-                    redprint("Grab %s failed" % lr)
-                    success = False
-                    misgrasp = True
-
+        redprint("Finished JOINT ANGLE trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
+        dof_inds = sim_util.getFullTraj(sim_env, bodypart2traj)[1]
+        
         if len(bodypart2traj) > 0:
             manip_names = []
             ee_links = []
             hmat_seglist = []
             old_trajs = []
             redprint("Optimizing TPS trajectory for part %i"%i_miniseg)
-            for lr in [key[0] for key in sorted(bodypart2traj.keys())]:
-                part_name = {"l":"larm", "r":"rarm"}[lr]
+            for (part_name, traj) in bodypart2traj.items():
+                lr = part_name[0]
                 manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
                 manip_names.append(manip_name)
                 ee_link_name = "%s_gripper_tool_frame"%lr
@@ -281,48 +264,48 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, simul
                 new_ee_traj = hmat_dict[lr][i_start:i_end+1]
                 new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
                 hmat_seglist.append(new_ee_traj_rs)
-                old_trajs.append(bodypart2traj[part_name])
+                old_trajs.append(traj)
            
-            tpsfulltraj, f_new, tps_cost, pose_costs, _ = planning.joint_fit_tps_follow_traj(sim_env.robot, '+'.join(manip_names),
+            tps_traj, f_new, tps_cost, pose_costs = planning.joint_fit_tps_follow_traj(sim_env.robot, '+'.join(manip_names),
                                                    ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
                                                    alpha=GlobalVars.alpha, beta=GlobalVars.beta, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+            tps_full_traj = (tps_traj, dof_inds)
             n_steps = len(hmat_seglist)
             total_tps_cost += tps_cost / float(GlobalVars.alpha)  # Normalize tps cost
             total_pose_cost += pose_costs * float(n_steps) / float(GlobalVars.beta)  # Normalize pose costs
             total_time_steps += n_steps
             handles = []
-            handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-            handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
-            handles.append(sim_env.env.plot3(f_new.transform_points(old_xyz),5, (0,1,0)))
-            handles.extend(plotting_openrave.draw_grid(sim_env.env, f_new.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (0,1,1,1)))
+            if animate:
+                handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
+                handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
+                handles.append(sim_env.env.plot3(f_new.transform_points(old_xyz),5, (0,1,0)))
+                handles.extend(plotting_openrave.draw_grid(sim_env.env, f_new.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (0,1,1,1)))
 
             redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
-            tpsfulltrajs.append(tpsfulltraj)
-            if not simulate:
-                continue
+        else:
+            tps_full_traj = (np.zeros((0,0)), [])
+        full_trajs.append(tps_full_traj)
+        if not simulate:
+            continue
 
-            # For some reason putting the gripper check here causes misgrasps sometimes,
-            # that aren't noted (e.g. task #18 for Feb 7 holdout set)
-            #for lr in 'lr':
-            #    gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
-            #    prev_gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
-            #    if not sim_util.set_gripper_maybesim(sim_env, lr, gripper_open, prev_gripper_open):
-            #        redprint("Grab %s failed" % lr)
-            #        success = False
-            #        misgrasp = True
+        # For open/close gripper logic to work correctly set_gripper_maybesim needs to be called even if tps_full_traj is empty
+        for lr in 'lr':
+            gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
+            prev_gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
+            if not sim_util.set_gripper_maybesim(sim_env, lr, gripper_open, prev_gripper_open):
+                redprint("Grab %s failed" % lr)
+                success = False
+                misgrasp = True
 
-            if not success: break
+        if not success: break
 
-            dof_inds = []
-            for manip_name in manip_names:
-                dof_inds.extend(sim_env.robot.GetManipulator(manip_name).GetArmIndices())            
-            sim_env.robot.SetActiveDOFs(dof_inds)
-            if not eval_util.traj_is_safe(sim_env, tpsfulltraj, COLLISION_DIST_THRESHOLD):
+        if len(tps_full_traj[0]) > 0:
+            if not eval_util.traj_is_safe(sim_env, tps_full_traj, COLLISION_DIST_THRESHOLD):
                 redprint("Trajectory not feasible")
-                feasible = False # do not break even if trajectory is not feasible
+                feasible = False
                 success = False
             else:  # Only execute feasible trajectories
-                success &= sim_util.sim_full_traj_maybesim(sim_env, tpsfulltraj, dof_inds, animate=animate)
+                success &= sim_util.sim_full_traj_maybesim(sim_env, tps_full_traj, animate=animate, interactive=interactive)
 
         if not success: break
 
@@ -336,55 +319,7 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, simul
     if animate:
         sim_env.viewer.Step()
     
-    return success, feasible, misgrasp, tpsfulltrajs
-
-def make_table_xml(translation, extents):
-    xml = """
-<Environment>
-  <KinBody name="table">
-    <Body type="static" name="table_link">
-      <Geom type="box">
-        <Translation>%f %f %f</Translation>
-        <extents>%f %f %f</extents>
-        <diffuseColor>.96 .87 .70</diffuseColor>
-      </Geom>
-    </Body>
-  </KinBody>
-</Environment>
-""" % (translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
-    return xml
-
-def make_box_xml(name, translation, extents):
-    xml = """
-<Environment>
-  <KinBody name="%s">
-    <Body type="dynamic" name="%s_link">
-      <Translation>%f %f %f</Translation>
-      <Geom type="box">
-        <extents>%f %f %f</extents>
-      </Geom>
-    </Body>
-  </KinBody>
-</Environment>
-""" % (name, name, translation[0], translation[1], translation[2], extents[0], extents[1], extents[2])
-    return xml
-
-def make_cylinder_xml(name, translation, radius, height):
-    xml = """
-<Environment>
-  <KinBody name="%s">
-    <Body type="dynamic" name="%s_link">
-      <Translation>%f %f %f</Translation>
-      <Geom type="cylinder">
-        <rotationaxis>1 0 0 90</rotationaxis>
-        <radius>%f</radius>
-        <height>%f</height>
-      </Geom>
-    </Body>
-  </KinBody>
-</Environment>
-""" % (name, name, translation[0], translation[1], translation[2], radius, height)
-    return xml
+    return success, feasible, misgrasp, full_trajs
 
 def follow_trajectory_cost(sim_env, target_ee_traj, old_joint_traj, robot):
     # assumes that target_traj has already been resampled
@@ -425,8 +360,6 @@ def regcost_trajopt_tps_feature_fn(sim_env, state, action):
     target_trajs = warp_hmats(get_ds_cloud(sim_env, action), state[1],[(lr, GlobalVars.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
     orig_joint_trajs = traj_utils.joint_trajs(action, GlobalVars.actions)
     feasible_trajs, err = follow_trajectory_cost(sim_env, target_trajs, orig_joint_trajs, sim_env.robot)
-
-    #saver = openravepy.RobotStateSaver(sim_env.robot)
 
     arm_inds = {}
     ee_links = {}
@@ -599,7 +532,7 @@ def eval_on_holdout(args, sim_env):
                 time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env)
                 best_root_action = agenda[i_choice][1]
                 start_time = time.time()
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, trajs = compute_traj_fn(sim_env, new_xyz, GlobalVars.actions[best_root_action], animate=args.animation)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_xyz, GlobalVars.actions[best_root_action], animate=args.animation, interactive=args.interactive)
                 eval_stats.exec_elapsed_time += time.time() - start_time
 
                 if eval_stats.feasible:  # try next action if TrajOpt cannot find feasible action
@@ -611,7 +544,7 @@ def eval_on_holdout(args, sim_env):
             if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
                 time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env)
             print "BEST ACTION:", best_root_action
-            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, trajs, q_values_root)
+            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root)
             
             if not eval_stats.found_feasible_action:
                 # Skip to next knot tie if the action is infeasible -- since
@@ -634,12 +567,12 @@ def load_simulation(args, sim_env):
     
     init_rope_xyz, _ = sim_util.load_fake_data_segment(sim_env, actions, args.fake_data_segment, args.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
     table_height = init_rope_xyz[:,2].mean() - .02
-    table_xml = make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
+    table_xml = sim_util.make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     sim_env.env.LoadData(table_xml)
     if args.elbow_obstacle:
         sim_env.env.Load("data/bookshelves.env.xml")
-        #sim_env.env.LoadData(make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
-        #sim_env.env.LoadData(make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
+        #sim_env.env.LoadData(sim_util.make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
+        #sim_env.env.LoadData(sim_util.make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
 
     cc = trajoptpy.GetCollisionChecker(sim_env.env)
     for gripper_link in [link for link in sim_env.robot.GetLinks() if 'gripper' in link.GetName()]:
