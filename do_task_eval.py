@@ -321,6 +321,58 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
     
     return success, feasible, misgrasp, full_trajs
 
+def simulate_demo_traj(sim_env, new_xyz, seg_info, full_trajs, animate=False, interactive=False):
+    sim_util.reset_arms_to_side(sim_env)
+    
+    old_xyz = np.squeeze(seg_info["cloud_xyz"])
+    old_xyz = clouds.downsample(old_xyz, DS_SIZE)
+    new_xyz = clouds.downsample(new_xyz, DS_SIZE)
+    
+    handles = []
+    if animate:
+        handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
+        handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
+
+    miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
+    success = True
+    feasible = True
+    misgrasp = False
+    print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
+
+    for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):      
+        if i_miniseg >= len(full_trajs): break           
+
+        full_traj = full_trajs[i_miniseg]
+
+        for lr in 'lr':
+            gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
+            prev_gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
+            if not sim_util.set_gripper_maybesim(sim_env, lr, gripper_open, prev_gripper_open):
+                redprint("Grab %s failed" % lr)
+                misgrasp = True
+                success = False
+
+        if not success: break
+
+        if len(full_traj[0]) > 0:
+            if not eval_util.traj_is_safe(sim_env, full_traj, COLLISION_DIST_THRESHOLD):
+                redprint("Trajectory not feasible")
+                feasible = False
+                success = False
+            else:  # Only execute feasible trajectories
+                success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive)
+
+        if not success: break
+
+    sim_env.sim.settle(animate=animate)
+    sim_env.sim.release_rope('l')
+    sim_env.sim.release_rope('r')
+    sim_util.reset_arms_to_side(sim_env)
+    if animate:
+        sim_env.viewer.Step()
+    
+    return success, feasible, misgrasp, full_trajs
+
 def follow_trajectory_cost(sim_env, target_ee_traj, old_joint_traj, robot):
     # assumes that target_traj has already been resampled
     sim_util.reset_arms_to_side(sim_env)
@@ -441,6 +493,7 @@ def parse_input_args():
     parser.add_argument('holdoutfile', nargs='?', default='data/misc/holdout_set.h5')
     parser.add_argument('warpingcost', choices=['regcost', 'regcost-trajopt', 'regcost-trajopt-tps', 'jointopt'])
     parser.add_argument("--resultfile", type=str) # don't save results if this is not specified
+    parser.add_argument("--loadresultfile", type=str) # replay this file if this is especified
     parser.add_argument('--ensemble', action='store_true')
     parser.add_argument("--animation", type=int, default=0)
     parser.add_argument("--i_start", type=int, default=-1)
@@ -519,7 +572,7 @@ def eval_on_holdout(args, sim_env):
             new_xyz = sim_env.sim.observe_cloud()
             state = ("eval_%i"%get_unique_id(), new_xyz)
     
-            if is_knot(new_xyz):
+            if is_knot(sim_env.sim.rope.GetControlPoints()):
                 break;
 
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
@@ -551,11 +604,72 @@ def eval_on_holdout(args, sim_env):
                 # that means all future steps (up to 5) will have infeasible trajectories
                 break
 
-        if is_knot(sim_env.sim.observe_cloud()):
+        if is_knot(sim_env.sim.rope.GetControlPoints()):
             num_successes += 1
         num_total += 1
 
         redprint('Successes / Total: ' + str(num_successes) + '/' + str(num_total))
+
+# make args more module (i.e. remove irrelevant args for replay mode)
+def replay_on_holdout(args, sim_env):
+    holdoutfile = h5py.File(args.holdoutfile, 'r')
+    tasks = eval_util.get_specified_tasks(args.tasks, args.taskfile, args.i_start, args.i_end)
+
+    num_successes = 0
+    num_total = 0
+
+    for i_task in tasks:
+        print "task %s" % i_task
+        sim_util.reset_arms_to_side(sim_env)
+        redprint("Replace rope")
+        rope_nodes, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task)
+        # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
+        time_machine = sim_util.RopeSimTimeMachine(rope_nodes, sim_env)
+
+        if args.animation:
+            sim_env.viewer.Step()
+
+        eval_util.save_task_results_init(args.resultfile, sim_env, i_task)
+
+        for i_step in range(args.num_steps):
+            print "task %s step %i" % (i_task, i_step)
+            sim_util.reset_arms_to_side(sim_env)
+
+            redprint("Observe point cloud")
+            new_xyz = sim_env.sim.observe_cloud()
+    
+            if is_knot(sim_env.sim.rope.GetControlPoints()):
+                break;
+
+            eval_stats = eval_util.EvalStats()
+
+            best_action, full_trajs, q_values = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
+            
+            time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
+
+            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
+            start_time = time.time()
+            eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_xyz, GlobalVars.actions[best_action], full_trajs, animate=args.animation, interactive=args.interactive)
+            eval_stats.exec_elapsed_time += time.time() - start_time
+
+            if eval_stats.feasible:
+                 eval_stats.found_feasible_action = True
+
+            if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
+                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
+            print "BEST ACTION:", best_action
+            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values)
+            
+            if not eval_stats.found_feasible_action:
+                # Skip to next knot tie if the action is infeasible -- since
+                # that means all future steps (up to 5) will have infeasible trajectories
+                break
+
+        if is_knot(sim_env.sim.rope.GetControlPoints()):
+            num_successes += 1
+        num_total += 1
+
+        redprint('REPLAY Successes / Total: ' + str(num_successes) + '/' + str(num_total))
 
 def load_simulation(args, sim_env):
     sim_env.env = openravepy.Environment()
@@ -595,7 +709,10 @@ def main():
     trajoptpy.SetInteractive(args.interactive)
     load_simulation(args, sim_env)
 
-    eval_on_holdout(args, sim_env)
+    if not args.loadresultfile:
+        eval_on_holdout(args, sim_env)
+    else:
+        replay_on_holdout(args, sim_env)
 
 if __name__ == "__main__":
     main()

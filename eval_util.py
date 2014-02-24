@@ -22,7 +22,7 @@ def get_specified_tasks(task_list, task_file, i_start, i_end):
         for line in file.xreadlines():
             tasks.append(int(line[5:-1]))
     if i_start != -1 and i_end != -1:
-        tasks = range(i_start, i_end)
+        tasks = tasks.extend(range(i_start, i_end))
     return tasks
 
 def get_holdout_items(holdoutfile, tasks):
@@ -35,6 +35,7 @@ def save_task_results_init(fname, sim_env, task_index):
     if fname is None:
         return
     result_file = h5py.File(fname, 'a')
+    task_index = str(task_index)
     if task_index in result_file:
         del result_file[task_index]
     result_file.create_group(task_index)
@@ -45,21 +46,34 @@ def save_task_results_init(fname, sim_env, task_index):
     result_file[task_index]['init']['rots'] = rots
     result_file.close()
 
+# TODO make the return values more consistent
+def load_task_results_init(fname, task_index):
+    if fname is None:
+        raise RuntimeError("Cannot load task results with an unspecified file name")
+    result_file = h5py.File(fname, 'r')
+    task_index = str(task_index)
+    rope_nodes = result_file[task_index]['init']['rope_nodes'][()]
+    trans = result_file[task_index]['init']['trans'][()]
+    rots = result_file[task_index]['init']['rots'][()]
+    return rope_nodes, trans, rots
+
 def save_task_results_step(fname, sim_env, task_index, step_index, eval_stats, best_root_action, full_trajs, q_values_root):
     if fname is None:
         return
     result_file = h5py.File(fname, 'a')
+    task_index = str(task_index)
+    step_index = str(step_index)
     assert task_index in result_file, "Must call save_task_results_init() before save_task_results_step()"
     
-    result_file[task_index].create_group(str(step_index))
-    result_file[task_index][str(step_index)]['misgrasp'] = 1 if eval_stats.misgrasp else 0
-    result_file[task_index][str(step_index)]['infeasible'] = 1 if not eval_stats.feasible else 0
-    result_file[task_index][str(step_index)]['rope_nodes'] = sim_env.sim.rope.GetControlPoints()
+    result_file[task_index].create_group(step_index)
+    result_file[task_index][step_index]['misgrasp'] = 1 if eval_stats.misgrasp else 0
+    result_file[task_index][step_index]['infeasible'] = 1 if not eval_stats.feasible else 0
+    result_file[task_index][step_index]['rope_nodes'] = sim_env.sim.rope.GetControlPoints()
     trans, rots = sim_util.get_rope_transforms(sim_env)
-    result_file[task_index][str(step_index)]['trans'] = trans
-    result_file[task_index][str(step_index)]['rots'] = rots
-    result_file[task_index][str(step_index)]['best_action'] = str(best_root_action)
-    full_trajs_g = result_file[task_index][str(step_index)].create_group('full_trajs')
+    result_file[task_index][step_index]['trans'] = trans
+    result_file[task_index][step_index]['rots'] = rots
+    result_file[task_index][step_index]['best_action'] = str(best_root_action)
+    full_trajs_g = result_file[task_index][step_index].create_group('full_trajs')
     for (i_traj, (traj, dof_inds)) in enumerate(full_trajs):
         full_traj_g = full_trajs_g.create_group(str(i_traj))
         # current version of h5py can't handle empty arrays, so don't save them if they are empty
@@ -67,10 +81,30 @@ def save_task_results_step(fname, sim_env, task_index, step_index, eval_stats, b
             full_traj_g['traj'] = traj
         if len(dof_inds) > 0:
             full_traj_g['dof_inds'] = dof_inds
-    result_file[task_index][str(step_index)]['values'] = q_values_root
-    result_file[task_index][str(step_index)]['action_time'] = eval_stats.action_elapsed_time
-    result_file[task_index][str(step_index)]['exec_time'] = eval_stats.exec_elapsed_time
+    result_file[task_index][step_index]['values'] = q_values_root
+    result_file[task_index][step_index]['action_time'] = eval_stats.action_elapsed_time
+    result_file[task_index][step_index]['exec_time'] = eval_stats.exec_elapsed_time
     result_file.close()
+
+# TODO make the return values more consistent
+def load_task_results_step(fname, sim_env, task_index, step_index):
+    if fname is None:
+        raise RuntimeError("Cannot load task results with an unspecified file name")
+    result_file = h5py.File(fname, 'r')
+    task_index = str(task_index)
+    step_index = str(step_index)
+    best_action = result_file[task_index][step_index]['best_action'][()]
+    full_trajs_g = result_file[task_index][step_index]['full_trajs']
+    full_trajs = []
+    for i_traj in range(len(full_trajs_g)):
+        full_traj_g = full_trajs_g[str(i_traj)]
+        if 'traj' in full_traj_g and 'dof_inds' in full_traj_g:
+            full_traj = (full_traj_g['traj'][()], list(full_traj_g['dof_inds'][()]))
+        else:
+            full_traj = (np.empty((0,0)), [])
+        full_trajs.append(full_traj)
+    q_values = result_file[task_index][step_index]['values'][()]
+    return best_action, full_trajs, q_values
 
 def traj_collisions(sim_env, full_traj, collision_dist_threshold, n=100):
     """
