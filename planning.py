@@ -129,6 +129,9 @@ def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
 def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta = 1., bend_coef=.1, rot_coef = 1e-5, wt_n=None):
     """
     The order of dof indices in hmats and traj should be the same as especified by manip_name
+
+    Note: returns tps_cost = (alpha / # correspondence points) * orig_tps_cost,
+                  pose_costs = (beta / # trajectory points) * orig_pose_costs
     """
     orig_dof_inds = robot.GetActiveDOFIndices()
     orig_dof_vals = robot.GetDOFValues()
