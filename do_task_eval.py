@@ -399,9 +399,10 @@ def regcost_trajopt_feature_fn(sim_env, state, action):
     trajopt_err = compute_trans_traj(sim_env, state[1], GlobalVars.actions[action], simulate=False)
 
     # don't rescale by alpha and beta
-    # rescaling by 1/beta bc cost has beta/n_steps in it
+    # trajopt_err should already be normalized by 1/n_steps and rescaled by 1/beta
+    # (original trajopt cost has constant multiplier of beta/n_steps)
     print "Regcost:", float(regcost) / get_ds_cloud(sim_env, action).shape[0], "Total", float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err) / float(GlobalVars.beta)
-    return np.array([float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err) / float(GlobalVars.beta)])  # TODO: Consider regcost + C*err
+    return np.array([float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err)])  # TODO: Consider regcost + C*err
 
 def regcost_trajopt_tps_feature_fn(sim_env, state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
