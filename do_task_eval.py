@@ -581,9 +581,6 @@ def eval_on_holdout(args, sim_env):
             new_xyz = sim_env.sim.observe_cloud()
             state = ("eval_%i"%get_unique_id(), new_xyz)
     
-            if is_knot(sim_env.sim.rope.GetControlPoints()):
-                break;
-
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
             eval_stats = eval_util.EvalStats()
 
@@ -612,6 +609,9 @@ def eval_on_holdout(args, sim_env):
                 # Skip to next knot tie if the action is infeasible -- since
                 # that means all future steps (up to 5) will have infeasible trajectories
                 break
+            
+            if is_knot(sim_env.sim.rope.GetControlPoints()):
+                break;
 
         if is_knot(sim_env.sim.rope.GetControlPoints()):
             num_successes += 1
@@ -623,11 +623,12 @@ def eval_on_holdout(args, sim_env):
 def replay_on_holdout(args, sim_env):
     holdoutfile = h5py.File(args.holdoutfile, 'r')
     tasks = eval_util.get_specified_tasks(args.tasks, args.taskfile, args.i_start, args.i_end)
+    holdout_items = eval_util.get_holdout_items(holdoutfile, tasks)
 
     num_successes = 0
     num_total = 0
-
-    for i_task in tasks:
+    
+    for i_task, demo_id_rope_nodes in holdout_items:
         print "task %s" % i_task
         sim_util.reset_arms_to_side(sim_env)
         redprint("Replace rope")
@@ -647,9 +648,6 @@ def replay_on_holdout(args, sim_env):
             redprint("Observe point cloud")
             new_xyz = sim_env.sim.observe_cloud()
     
-            if is_knot(sim_env.sim.rope.GetControlPoints()):
-                break;
-
             eval_stats = eval_util.EvalStats()
 
             best_action, full_trajs, q_values = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
@@ -673,6 +671,9 @@ def replay_on_holdout(args, sim_env):
                 # Skip to next knot tie if the action is infeasible -- since
                 # that means all future steps (up to 5) will have infeasible trajectories
                 break
+            
+            if is_knot(sim_env.sim.rope.GetControlPoints()):
+                break;
 
         if is_knot(sim_env.sim.rope.GetControlPoints()):
             num_successes += 1
