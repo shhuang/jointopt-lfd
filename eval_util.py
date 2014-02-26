@@ -107,17 +107,18 @@ def save_task_follow_traj_inputs(fname, sim_env, task_index, step_index, choice_
         result_file[task_index][step_index]['plan_traj'].create_group(choice_index)
     if miniseg_index not in result_file[task_index][step_index]['plan_traj'][choice_index]:
         result_file[task_index][step_index]['plan_traj'][choice_index].create_group(miniseg_index)
+    manip_g = result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index].create_group(manip_name)
 
-    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]['rope_nodes'] = sim_env.sim.rope.GetControlPoints()
+    manip_g['rope_nodes'] = sim_env.sim.rope.GetControlPoints()
     trans, rots = sim_util.get_rope_transforms(sim_env)
-    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]['trans'] = trans
-    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]['rots'] = rots
-    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]['dof_inds'] = sim_env.robot.GetActiveDOFIndices()
-    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]['dof_vals'] = sim_env.robot.GetDOFValues()
-    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index].create_group('new_hmats')
+    manip_g['trans'] = trans
+    manip_g['rots'] = rots
+    manip_g['dof_inds'] = sim_env.robot.GetActiveDOFIndices()
+    manip_g['dof_vals'] = sim_env.robot.GetDOFValues()
+    manip_g.create_group('new_hmats')
     for (i_hmat, new_hmat) in enumerate(new_hmats):
-        result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]['new_hmats'][str(i_hmat)] = new_hmat
-    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]['old_traj'] = old_traj
+        manip_g['new_hmats'][str(i_hmat)] = new_hmat
+    manip_g['old_traj'] = old_traj
     result_file.close()
 
 # TODO make the return values more consistent
