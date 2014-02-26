@@ -121,6 +121,25 @@ def save_task_follow_traj_inputs(fname, sim_env, task_index, step_index, choice_
     manip_g['old_traj'] = old_traj
     result_file.close()
 
+def save_task_follow_traj_output(fname, task_index, step_index, choice_index, miniseg_index, manip_name, new_joint_traj):
+    if fname is None:
+        return
+    result_file = h5py.File(fname, 'a')
+    task_index = str(task_index)
+    step_index = str(step_index)
+    choice_index = str(choice_index)
+    miniseg_index = str(miniseg_index)
+
+    assert task_index in result_file, "Must call save_task_follow_traj_inputs() before save_task_follow_traj_output()"
+    assert step_index in result_file[task_index]
+    assert 'plan_traj' in result_file[task_index][step_index]
+    assert choice_index in result_file[task_index][step_index]['plan_traj']
+    assert miniseg_index in result_file[task_index][step_index]['plan_traj'][choice_index]
+    assert manip_name in result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]
+
+    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index][manip_name]['output_traj'] = new_joint_traj
+    result_file.close()
+
 # TODO make the return values more consistent
 def load_task_results_step(fname, sim_env, task_index, step_index):
     if fname is None:
