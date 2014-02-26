@@ -312,45 +312,6 @@ class RopeSimTimeMachine(object):
         set_rope_transforms(self.checkpoints[id], sim_env)
         sim_env.sim.settle()
 
-def simulate_demo_traj(sim_env, new_xyz, seg_info, bodypart2trajs, animate=False, interactive=False):
-    reset_arms_to_side(sim_env)
-    
-    handles = []
-    old_xyz = np.squeeze(seg_info["cloud_xyz"])
-    handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-    handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
-    
-    miniseg_starts, miniseg_ends = split_trajectory_by_gripper(seg_info)    
-    success = True
-    print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
-    for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):            
-        if i_miniseg >= len(bodypart2trajs): break
-
-        bodypart2traj = bodypart2trajs[i_miniseg]
-
-        for lr in 'lr':
-            gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
-            prev_gripper_open = binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
-            if not sim_util.set_gripper_maybesim(sim_env, lr, gripper_open, prev_gripper_open):
-                redprint("Grab %s failed" % lr)
-                success = False
-
-        if not success: break
-
-        if len(bodypart2traj) > 0:
-            success &= sim_util.sim_traj_maybesim(sim_env, bodypart2traj, animate=animate, interactive=interactive)
-
-        if not success: break
-
-    sim_env.sim.settle(animate=animate)
-    sim_env.sim.release_rope('l')
-    sim_env.sim.release_rope('r')
-    reset_arms_to_side(sim_env)
-    if animate:
-        sim_env.viewer.Step()
-
-    return success
-
 def tpsrpm_plot_cb(sim_env, x_nd, y_md, targ_Nd, corr_nm, wt_n, f):
     ypred_nd = f.transform_points(x_nd)
     handles = []

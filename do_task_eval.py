@@ -323,6 +323,58 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
     
     return success, feasible, misgrasp, full_trajs
 
+def simulate_demo_traj(sim_env, new_xyz, seg_info, full_trajs, animate=False, interactive=False):
+    sim_util.reset_arms_to_side(sim_env)
+    
+    old_xyz = np.squeeze(seg_info["cloud_xyz"])
+    old_xyz = clouds.downsample(old_xyz, DS_SIZE)
+    new_xyz = clouds.downsample(new_xyz, DS_SIZE)
+    
+    handles = []
+    if animate:
+        handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
+        handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
+
+    miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
+    success = True
+    feasible = True
+    misgrasp = False
+    print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
+
+    for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):      
+        if i_miniseg >= len(full_trajs): break           
+
+        full_traj = full_trajs[i_miniseg]
+
+        for lr in 'lr':
+            gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
+            prev_gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start-1]) if i_start != 0 else False
+            if not sim_util.set_gripper_maybesim(sim_env, lr, gripper_open, prev_gripper_open):
+                redprint("Grab %s failed" % lr)
+                misgrasp = True
+                success = False
+
+        if not success: break
+
+        if len(full_traj[0]) > 0:
+            if not eval_util.traj_is_safe(sim_env, full_traj, COLLISION_DIST_THRESHOLD):
+                redprint("Trajectory not feasible")
+                feasible = False
+                success = False
+            else:  # Only execute feasible trajectories
+                success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive)
+
+        if not success: break
+
+    sim_env.sim.settle(animate=animate)
+    sim_env.sim.release_rope('l')
+    sim_env.sim.release_rope('r')
+    sim_util.reset_arms_to_side(sim_env)
+    if animate:
+        sim_env.viewer.Step()
+    
+    return success, feasible, misgrasp, full_trajs
+
 def follow_trajectory_cost(sim_env, target_ee_traj, old_joint_traj, robot):
     # assumes that target_traj has already been resampled
     sim_util.reset_arms_to_side(sim_env)
@@ -413,11 +465,13 @@ def set_global_vars(args, sim_env):
     if args.random_seed is not None: np.random.seed(args.random_seed)
 
     # Note: alpha and beta should not be changed anywhere else!
-    GlobalVars.alpha = args.alpha
-    GlobalVars.beta = args.beta
+    if args.subparser_name == "eval":
+        GlobalVars.alpha = args.alpha
+        GlobalVars.beta = args.beta
 
     GlobalVars.actions = h5py.File(args.actionfile, 'r')
-    GlobalVars.gripper_weighting = args.gripper_weighting
+    if args.subparser_name == "eval":
+        GlobalVars.gripper_weighting = args.gripper_weighting
 
 def select_fns(args):
     # feature_fn is used to select the best action (i.e. demonstration)
@@ -442,33 +496,40 @@ def select_fns(args):
 def parse_input_args():
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('actionfile', nargs='?', default='data/misc/actions.h5')
-    parser.add_argument('holdoutfile', nargs='?', default='data/misc/holdout_set.h5')
-    parser.add_argument('warpingcost', choices=['regcost', 'regcost-trajopt', 'regcost-trajopt-tps', 'jointopt'])
-    parser.add_argument("--resultfile", type=str) # don't save results if this is not specified
-    parser.add_argument('--ensemble', action='store_true')
-    parser.add_argument("--animation", type=int, default=0)
-    parser.add_argument("--i_start", type=int, default=-1)
-    parser.add_argument("--i_end", type=int, default=-1)
-    parser.add_argument("--gripper_weighting", action="store_true")
+    parser.add_argument('actionfile', type=str, nargs='?', default='data/misc/actions.h5')
+    parser.add_argument('holdoutfile', type=str, nargs='?', default='data/misc/holdout_set.h5')
 
-    parser.add_argument("--elbow_obstacle", action="store_true")
-    parser.add_argument("--jointopt", action="store_true")
-    parser.add_argument("--search_until_feasible", action="store_true")
-    parser.add_argument("--alpha", type=int, default=20)
-    parser.add_argument("--beta", type=int, default=10)
-    parser.add_argument("--print_mean_and_var", action="store_true")
-    
-    parser.add_argument("--tasks", nargs='+', type=int)
+    parser.add_argument("--animation", type=int, default=0)
+    parser.add_argument("--interactive", action="store_true", help="step animation and optimization if specified")
+    parser.add_argument("--obstacles", type=str, nargs='*', choices=['bookshelve', 'boxes'])
+    parser.add_argument("--num_steps", type=int, default=5, help="maximum number of steps to simulate each task")
+    parser.add_argument("--resultfile", type=str, help="no results are saved if this is not specified")
+
+    # selects tasks to evaluate/replay
+    parser.add_argument("--tasks", type=int, nargs='*', metavar="i_task")
     parser.add_argument("--taskfile", type=str)
-    parser.add_argument("--num_steps", type=int, default=5)
+    parser.add_argument("--i_start", type=int, default=-1, metavar="i_task")
+    parser.add_argument("--i_end", type=int, default=-1, metavar="i_task")
     
     parser.add_argument("--fake_data_segment",type=str, default='demo1-seg00')
     parser.add_argument("--fake_data_transform", type=float, nargs=6, metavar=("tx","ty","tz","rx","ry","rz"),
         default=[0,0,0,0,0,0], help="translation=(tx,ty,tz), axis-angle rotation=(rx,ry,rz)")
     parser.add_argument("--random_seed", type=int, default=None)
-    parser.add_argument("--interactive",action="store_true")
-    parser.add_argument("--log", type=str, default="", help="")
+    parser.add_argument("--log", type=str, default="")
+
+    subparsers = parser.add_subparsers(dest='subparser_name')
+
+    parser_eval = subparsers.add_parser('eval')
+    parser_eval.add_argument('warpingcost', type=str, choices=['regcost', 'regcost-trajopt', 'regcost-trajopt-tps', 'jointopt'])
+    parser_eval.add_argument("--jointopt", action="store_true")
+    parser_eval.add_argument("--search_until_feasible", action="store_true")
+    parser_eval.add_argument("--alpha", type=int, default=20)
+    parser_eval.add_argument("--beta", type=int, default=10)
+    parser_eval.add_argument("--gripper_weighting", action="store_true")
+    parser_eval.add_argument("--print_mean_and_var", action="store_true")
+    
+    parser_replay = subparsers.add_parser('replay')
+    parser_replay.add_argument("loadresultfile", type=str)
 
     return parser.parse_args()
 
@@ -525,9 +586,6 @@ def eval_on_holdout(args, sim_env):
             new_xyz = sim_env.sim.observe_cloud()
             state = ("eval_%i"%get_unique_id(), new_xyz)
     
-            if is_knot(new_xyz):
-                break;
-
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
             eval_stats = eval_util.EvalStats()
 
@@ -556,12 +614,77 @@ def eval_on_holdout(args, sim_env):
                 # Skip to next knot tie if the action is infeasible -- since
                 # that means all future steps (up to 5) will have infeasible trajectories
                 break
+            
+            if is_knot(sim_env.sim.rope.GetControlPoints()):
+                break;
 
-        if is_knot(sim_env.sim.observe_cloud()):
+        if is_knot(sim_env.sim.rope.GetControlPoints()):
             num_successes += 1
         num_total += 1
 
-        redprint('Successes / Total: ' + str(num_successes) + '/' + str(num_total))
+        redprint('Eval Successes / Total: ' + str(num_successes) + '/' + str(num_total))
+
+# make args more module (i.e. remove irrelevant args for replay mode)
+def replay_on_holdout(args, sim_env):
+    holdoutfile = h5py.File(args.holdoutfile, 'r')
+    tasks = eval_util.get_specified_tasks(args.tasks, args.taskfile, args.i_start, args.i_end)
+    holdout_items = eval_util.get_holdout_items(holdoutfile, tasks)
+
+    num_successes = 0
+    num_total = 0
+    
+    for i_task, demo_id_rope_nodes in holdout_items:
+        print "task %s" % i_task
+        sim_util.reset_arms_to_side(sim_env)
+        redprint("Replace rope")
+        rope_nodes, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task)
+        # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
+        time_machine = sim_util.RopeSimTimeMachine(rope_nodes, sim_env)
+
+        if args.animation:
+            sim_env.viewer.Step()
+
+        eval_util.save_task_results_init(args.resultfile, sim_env, i_task)
+
+        for i_step in range(args.num_steps):
+            print "task %s step %i" % (i_task, i_step)
+            sim_util.reset_arms_to_side(sim_env)
+
+            redprint("Observe point cloud")
+            new_xyz = sim_env.sim.observe_cloud()
+    
+            eval_stats = eval_util.EvalStats()
+
+            best_action, full_trajs, q_values = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
+            
+            time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
+
+            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
+            start_time = time.time()
+            eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_xyz, GlobalVars.actions[best_action], full_trajs, animate=args.animation, interactive=args.interactive)
+            eval_stats.exec_elapsed_time += time.time() - start_time
+
+            if eval_stats.feasible:
+                 eval_stats.found_feasible_action = True
+
+            if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
+                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
+            print "BEST ACTION:", best_action
+            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values)
+            
+            if not eval_stats.found_feasible_action:
+                # Skip to next knot tie if the action is infeasible -- since
+                # that means all future steps (up to 5) will have infeasible trajectories
+                break
+            
+            if is_knot(sim_env.sim.rope.GetControlPoints()):
+                break;
+
+        if is_knot(sim_env.sim.rope.GetControlPoints()):
+            num_successes += 1
+        num_total += 1
+
+        redprint('REPLAY Successes / Total: ' + str(num_successes) + '/' + str(num_total))
 
 def load_simulation(args, sim_env):
     sim_env.env = openravepy.Environment()
@@ -575,10 +698,11 @@ def load_simulation(args, sim_env):
     table_height = init_rope_xyz[:,2].mean() - .02
     table_xml = sim_util.make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     sim_env.env.LoadData(table_xml)
-    if args.elbow_obstacle:
+    if 'bookshelve' in args.obstacles:
         sim_env.env.Load("data/bookshelves.env.xml")
-        #sim_env.env.LoadData(sim_util.make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
-        #sim_env.env.LoadData(sim_util.make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
+    if 'boxes' in args.obstacles:
+        sim_env.env.LoadData(sim_util.make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
+        sim_env.env.LoadData(sim_util.make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
 
     cc = trajoptpy.GetCollisionChecker(sim_env.env)
     for gripper_link in [link for link in sim_env.robot.GetLinks() if 'gripper' in link.GetName()]:
@@ -601,15 +725,22 @@ def main():
     trajoptpy.SetInteractive(args.interactive)
     load_simulation(args, sim_env)
 
-    eval_on_holdout(args, sim_env)
+    if args.subparser_name == "eval":
+        eval_on_holdout(args, sim_env)
+    elif args.subparser_name == "replay":
+        replay_on_holdout(args, sim_env)
+    else:
+        raise RuntimeError("Invalid subparser name")
 
     if args.print_mean_and_var:
-        print "TPS error mean:", np.mean(GlobalVars.tps_errors_top10)
-        print "TPS error variance:", np.var(GlobalVars.tps_errors_top10)
-        print "Total Num TPS errors:", len(GlobalVars.tps_errors_top10)
-        print "TrajOpt error mean:", np.mean(GlobalVars.trajopt_errors_top10)
-        print "TrajOpt error variance:", np.var(GlobalVars.trajopt_errors_top10)
-        print "Total Num TrajOpt errors:", len(GlobalVars.trajopt_errors_top10)
+        if GlobalVars.tps_errors_top10:
+            print "TPS error mean:", np.mean(GlobalVars.tps_errors_top10)
+            print "TPS error variance:", np.var(GlobalVars.tps_errors_top10)
+            print "Total Num TPS errors:", len(GlobalVars.tps_errors_top10)
+        if GlobalVars.trajopt_errors_top10:
+            print "TrajOpt error mean:", np.mean(GlobalVars.trajopt_errors_top10)
+            print "TrajOpt error variance:", np.var(GlobalVars.trajopt_errors_top10)
+            print "Total Num TrajOpt errors:", len(GlobalVars.trajopt_errors_top10)
 
 if __name__ == "__main__":
     main()
