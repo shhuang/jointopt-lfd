@@ -16,7 +16,7 @@ import pdb, time
 import cloudprocpy, trajoptpy, openravepy
 from rope_qlearn import *
 from knot_classifier import isKnot as is_knot
-import os, numpy as np, h5py
+import os, os.path, numpy as np, h5py
 from numpy import asarray
 import atexit
 import importlib
@@ -495,7 +495,7 @@ def parse_input_args():
     parser.add_argument('actionfile', type=str, nargs='?', default='data/misc/actions.h5')
     parser.add_argument('holdoutfile', type=str, nargs='?', default='data/misc/holdout_set.h5')
 
-    parser.add_argument("--animation", type=int, default=0)
+    parser.add_argument("--animation", type=int, default=0, help="if greater than 1, the viewer tries to load the window and camera properties without idling at the beginning")
     parser.add_argument("--interactive", action="store_true", help="step animation and optimization if specified")
     parser.add_argument("--obstacles", type=str, nargs='*', choices=['bookshelve', 'boxes'])
     parser.add_argument("--num_steps", type=int, default=5, help="maximum number of steps to simulate each task")
@@ -507,6 +507,8 @@ def parse_input_args():
     parser.add_argument("--i_start", type=int, default=-1, metavar="i_task")
     parser.add_argument("--i_end", type=int, default=-1, metavar="i_task")
     
+    parser.add_argument("--camera_matrix_file", type=str, default='.camera_matrix.npy')
+    parser.add_argument("--window_prop_file", type=str, default='.win_prop.npy')
     parser.add_argument("--fake_data_segment",type=str, default='demo1-seg00')
     parser.add_argument("--fake_data_transform", type=float, nargs=6, metavar=("tx","ty","tz","rx","ry","rz"),
         default=[0,0,0,0,0,0], help="translation=(tx,ty,tz), axis-angle rotation=(rx,ry,rz)")
@@ -707,9 +709,21 @@ def load_simulation(args, sim_env):
     
     if args.animation:
         sim_env.viewer = trajoptpy.GetViewer(sim_env.env)
-        print "move viewer to viewpoint that isn't stupid"
-        print "then hit 'p' to continue"
-        sim_env.viewer.Idle()
+        if args.animation > 1 and os.path.isfile(args.window_prop_file) and os.path.isfile(args.camera_matrix_file):
+            print "loading window and camera properties"
+            window_prop = np.load(args.window_prop_file)
+            camera_matrix = np.load(args.camera_matrix_file)
+            sim_env.viewer.SetWindowProp(*window_prop)
+            sim_env.viewer.SetCameraManipulatorMatrix(camera_matrix)
+        else:
+            print "move viewer to viewpoint that isn't stupid"
+            print "then hit 'p' to continue"
+            sim_env.viewer.Idle()
+            print "saving window and camera properties"
+            window_prop = sim_env.viewer.GetWindowProp()
+            camera_matrix = sim_env.viewer.GetCameraManipulatorMatrix()
+            np.save(args.window_prop_file, window_prop)
+            np.save(args.camera_matrix_file, camera_matrix)
 
 def main():
     args = parse_input_args()
