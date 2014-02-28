@@ -64,8 +64,9 @@ def save_task_results_step(fname, sim_env, task_index, step_index, eval_stats, b
     task_index = str(task_index)
     step_index = str(step_index)
     assert task_index in result_file, "Must call save_task_results_init() before save_task_results_step()"
-    
-    result_file[task_index].create_group(step_index)
+ 
+    if step_index not in result_file[task_index]:
+        result_file[task_index].create_group(step_index)
     result_file[task_index][step_index]['misgrasp'] = 1 if eval_stats.misgrasp else 0
     result_file[task_index][step_index]['infeasible'] = 1 if not eval_stats.feasible else 0
     result_file[task_index][step_index]['rope_nodes'] = sim_env.sim.rope.GetControlPoints()
@@ -84,6 +85,59 @@ def save_task_results_step(fname, sim_env, task_index, step_index, eval_stats, b
     result_file[task_index][step_index]['values'] = q_values_root
     result_file[task_index][step_index]['action_time'] = eval_stats.action_elapsed_time
     result_file[task_index][step_index]['exec_time'] = eval_stats.exec_elapsed_time
+    result_file.close()
+
+def save_task_follow_traj_inputs(fname, sim_env, task_index, step_index, choice_index, miniseg_index, manip_name,
+                                 new_hmats, old_traj):
+    if fname is None:
+        return
+    result_file = h5py.File(fname, 'a')
+    task_index = str(task_index)
+    step_index = str(step_index)
+    choice_index = str(choice_index)
+    miniseg_index = str(miniseg_index)
+    assert task_index in result_file, "Must call save_task_results_int() before save_task_follow_traj_inputs()"
+
+    if step_index not in result_file[task_index]:
+        result_file[task_index].create_group(step_index)
+
+    if 'plan_traj' not in result_file[task_index][step_index]:
+        result_file[task_index][step_index].create_group('plan_traj')
+    if choice_index not in result_file[task_index][step_index]['plan_traj']:
+        result_file[task_index][step_index]['plan_traj'].create_group(choice_index)
+    if miniseg_index not in result_file[task_index][step_index]['plan_traj'][choice_index]:
+        result_file[task_index][step_index]['plan_traj'][choice_index].create_group(miniseg_index)
+    manip_g = result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index].create_group(manip_name)
+
+    manip_g['rope_nodes'] = sim_env.sim.rope.GetControlPoints()
+    trans, rots = sim_util.get_rope_transforms(sim_env)
+    manip_g['trans'] = trans
+    manip_g['rots'] = rots
+    manip_g['dof_inds'] = sim_env.robot.GetActiveDOFIndices()
+    manip_g['dof_vals'] = sim_env.robot.GetDOFValues()
+    manip_g.create_group('new_hmats')
+    for (i_hmat, new_hmat) in enumerate(new_hmats):
+        manip_g['new_hmats'][str(i_hmat)] = new_hmat
+    manip_g['old_traj'] = old_traj
+    result_file.close()
+
+def save_task_follow_traj_output(fname, task_index, step_index, choice_index, miniseg_index, manip_name, new_joint_traj):
+    if fname is None:
+        return
+    result_file = h5py.File(fname, 'a')
+    task_index = str(task_index)
+    step_index = str(step_index)
+    choice_index = str(choice_index)
+    miniseg_index = str(miniseg_index)
+
+    assert task_index in result_file, "Must call save_task_follow_traj_inputs() before save_task_follow_traj_output()"
+    assert step_index in result_file[task_index]
+    assert 'plan_traj' in result_file[task_index][step_index]
+    assert choice_index in result_file[task_index][step_index]['plan_traj']
+    assert miniseg_index in result_file[task_index][step_index]['plan_traj'][choice_index]
+    assert manip_name in result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index]
+
+    result_file[task_index][step_index]['plan_traj'][choice_index][miniseg_index][manip_name]['output_traj'] = new_joint_traj
     result_file.close()
 
 # TODO make the return values more consistent

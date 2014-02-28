@@ -37,6 +37,8 @@ class GlobalVars:
     resample_rope = None
     actions = None
     gripper_weighting = False
+    tps_errors_top10 = []
+    trajopt_errors_top10 = []
 
 def get_ds_cloud(sim_env, action):
     return clouds.downsample(GlobalVars.actions[action]['cloud_xyz'], DS_SIZE)
@@ -401,7 +403,9 @@ def regcost_trajopt_feature_fn(sim_env, state, action):
     # don't rescale by alpha and beta
     # trajopt_err should already be normalized by 1/n_steps and rescaled by 1/beta
     # (original trajopt cost has constant multiplier of beta/n_steps)
-    print "Regcost:", float(regcost) / get_ds_cloud(sim_env, action).shape[0], "Total", float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err) / float(GlobalVars.beta)
+    print "Regcost:", float(regcost) / get_ds_cloud(sim_env, action).shape[0], "Total", float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err)
+    GlobalVars.tps_errors_top10.append(float(regcost) / get_ds_cloud(sim_env, action).shape[0])
+    GlobalVars.trajopt_errors_top10.append(float(trajopt_err))
     return np.array([float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err)])  # TODO: Consider regcost + C*err
 
 def regcost_trajopt_tps_feature_fn(sim_env, state, action):
@@ -524,6 +528,7 @@ def parse_input_args():
     parser_eval.add_argument("--alpha", type=int, default=20)
     parser_eval.add_argument("--beta", type=int, default=10)
     parser_eval.add_argument("--gripper_weighting", action="store_true")
+    parser_eval.add_argument("--print_mean_and_var", action="store_true")
     
     parser_replay = subparsers.add_parser('replay')
     parser_replay.add_argument("loadresultfile", type=str)
@@ -740,6 +745,16 @@ def main():
         replay_on_holdout(args, sim_env)
     else:
         raise RuntimeError("Invalid subparser name")
+
+    if args.print_mean_and_var:
+        if GlobalVars.tps_errors_top10:
+            print "TPS error mean:", np.mean(GlobalVars.tps_errors_top10)
+            print "TPS error variance:", np.var(GlobalVars.tps_errors_top10)
+            print "Total Num TPS errors:", len(GlobalVars.tps_errors_top10)
+        if GlobalVars.trajopt_errors_top10:
+            print "TrajOpt error mean:", np.mean(GlobalVars.trajopt_errors_top10)
+            print "TrajOpt error variance:", np.var(GlobalVars.trajopt_errors_top10)
+            print "Total Num TrajOpt errors:", len(GlobalVars.trajopt_errors_top10)
 
 if __name__ == "__main__":
     main()
