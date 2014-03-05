@@ -31,7 +31,7 @@ def get_holdout_items(holdoutfile, tasks):
     else:
         return [(unicode(t), holdoutfile[unicode(t)]) for t in tasks]
 
-def save_task_results_init(fname, sim_env, task_index):
+def save_task_results_init(fname, sim_env, task_index, rope_nodes):
     if fname is None:
         return
     result_file = h5py.File(fname, 'a')
@@ -41,7 +41,7 @@ def save_task_results_init(fname, sim_env, task_index):
     result_file.create_group(task_index)
     result_file[task_index].create_group('init')
     trans, rots = sim_util.get_rope_transforms(sim_env)
-    result_file[task_index]['init']['rope_nodes'] = sim_env.sim.rope.GetControlPoints()
+    result_file[task_index]['init']['rope_nodes'] = rope_nodes
     result_file[task_index]['init']['trans'] = trans
     result_file[task_index]['init']['rots'] = rots
     result_file.close()
