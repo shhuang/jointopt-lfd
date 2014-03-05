@@ -68,11 +68,15 @@ def estimate_performance(results_file):
     if timing_logged:
         print "Time taken to choose demo:", action_time, "seconds"
         print "Time taken to warp and execute demo:", exec_time, "seconds"
-    return float(num_knots)/len(results_file)
+    return num_knots
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("results_file", type=str)
     args = parser.parse_args()
     
-    print "Success rate:", estimate_performance(args.results_file)
+    results_file = h5py.File(args.results_file, 'r')
+    
+    num_successes = estimate_performance(args.results_file)
+    print "Successes / Total: %d/%d" % (num_successes, len(results_file))
+    print "Success rate:", float(num_successes)/float(len(results_file))
