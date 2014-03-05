@@ -20,7 +20,10 @@ def get_specified_tasks(task_list, task_file, i_start, i_end):
     if task_file is not None:
         file = open(task_file, 'r')
         for line in file.xreadlines():
-            tasks.append(int(line[5:-1]))
+            try:
+                tasks.append(int(line))
+            except:
+                print "get_specified_tasks:", line, "is not a valid task"
     if i_start != -1 and i_end != -1:
         tasks.extend(range(i_start, i_end))
     return tasks
