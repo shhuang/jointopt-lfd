@@ -74,17 +74,17 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
     pose_costs = 0
     for (cost_type, cost_val) in result.GetCosts():
         if cost_type == 'pose':
-            pose_costs += abs(cost_val)
-    #with openravepy.RobotStateSaver(robot):
-    #    pos_errs = []
-    #    for i_step in xrange(1,n_steps):
-    #        row = traj[i_step]
-    #        robot.SetDOFValues(row, arm_inds)
-    #        tf = ee_link.GetTransform()
-    #        pos = tf[:3,3]
-    #        pos_err = np.linalg.norm(poses[i_step][4:7] - pos)
-    #        pos_errs.append(pos_err)
-    #    pos_errs = np.array(pos_errs)
+            pose_costs += cost_val
+    
+    pose_costs2 = 0
+    with openravepy.RobotStateSaver(robot):
+        poses = [openravepy.poseFromMatrix(hmat) for hmat in new_hmats]
+        for (i_step,pose) in enumerate(poses):
+            robot.SetDOFValues(traj[i_step], arm_inds)
+            new_pose = ee_link.GetTransformPose()
+            pose_err = openravepy.poseMult(openravepy.InvertPose(pose), new_pose)
+            pose_costs2 += np.abs(pose_err[1:7] * beta/n_steps).sum()
+    print "pose_costs", pose_costs, pose_costs2
 
     print "planned trajectory for %s. total pose error: %.3f."%(manip_name, pose_costs)
 
@@ -251,9 +251,29 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
     pose_costs = 0
     for (cost_type, cost_val) in result.GetCosts():
         if cost_type == "tps":
-            tps_cost += abs(cost_val)
+            tps_cost += cost_val
         elif cost_type == "tps_pose":
-            pose_costs += abs(cost_val)
+            pose_costs += cost_val
+    
+    w_sqrt = np.sqrt(wt_n)
+    f_x_na = f.transform_points(x_na)
+    K = tps.tps_kernel_matrix(x_na)
+    tps_cost2 = (alpha/x_na.shape[0]) * (np.linalg.norm((f_x_na - y_ng) * np.repeat(w_sqrt[:,None],3,1))**2 \
+        + bend_coef * (f.w_ng.T.dot(K.dot(f.w_ng))).trace() \
+        + (f.lin_ag.T.dot(np.diag(rot_coefs).dot(f.lin_ag))).trace() \
+        - np.diag(rot_coefs).dot(f.lin_ag.T).trace())
+    print "tps_cost", tps_cost, tps_cost2
+
+    pose_costs2 = 0
+    with openravepy.RobotStateSaver(robot):
+        for ee_link, old_hmats in zip(ee_links, old_hmats_list):
+            for (i_step, old_hmat) in enumerate(old_hmats):
+                robot.SetDOFValues(traj[i_step], arm_inds)
+                cur_pose = ee_link.GetTransformPose()
+                warped_src_pose = openravepy.poseFromMatrix(f.transform_hmats(np.array([old_hmat]))[0])
+                pose_err = openravepy.poseMult(openravepy.InvertPose(warped_src_pose), cur_pose)
+                pose_costs2 += np.abs(pose_err[1:7] * np.array([.1, .1, .1, 1, 1, 1]) * beta/n_steps).sum()
+    print "pose_costs", pose_costs, pose_costs2
 
     print "planned trajectory for %s. tps error: %.3f. total pose error: %.3f."%(manip_name, tps_cost, pose_costs)
     
