@@ -22,12 +22,12 @@ def get_specified_tasks(task_list, task_file, i_start, i_end):
         for line in file.xreadlines():
             tasks.append(int(line[5:-1]))
     if i_start != -1 and i_end != -1:
-        tasks = tasks.extend(range(i_start, i_end))
+        tasks.extend(range(i_start, i_end))
     return tasks
 
 def get_holdout_items(holdoutfile, tasks):
     if not tasks:
-        return holdoutfile.iteritems()
+        return sorted(holdoutfile.iteritems(), key=lambda item: int(item[0]))
     else:
         return [(unicode(t), holdoutfile[unicode(t)]) for t in tasks]
 
