@@ -80,8 +80,8 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=Fa
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     full_trajs = []
 
-    trajopt_err = 0
-    total_time_steps = 0
+    total_pose_cost = 0
+    total_poses = 0
     for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):            
 
         ################################    
@@ -114,11 +114,11 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=Fa
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             print "planning trajectory following"
-            new_joint_traj, pos_errs = planning.plan_follow_traj(sim_env.robot, manip_name,
+            new_joint_traj, pose_errs = planning.plan_follow_traj(sim_env.robot, manip_name,
                                                        sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta=GlobalVars.beta)
             n_steps = len(new_ee_traj_rs)
-            trajopt_err += pos_errs * float(n_steps) / float(GlobalVars.beta)   # Normalize pos error
-            total_time_steps += n_steps
+            total_pose_cost += pose_errs * float(n_steps) / float(GlobalVars.beta)   # Normalize pos error
+            total_poses += n_steps
 
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
@@ -150,7 +150,7 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=Fa
         if not success: break
 
     if not simulate:
-        return trajopt_err / float(total_time_steps)
+        return total_pose_cost / float(total_poses)
 
     sim_env.sim.settle(animate=animate)
     sim_env.sim.release_rope('l')
@@ -212,7 +212,7 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
     full_trajs = []
     total_tps_cost = 0
     total_pose_cost = 0
-    total_time_steps = 0
+    total_poses = 0
     
     for (i_miniseg, (i_start, i_end)) in enumerate(zip(miniseg_starts, miniseg_ends)):            
 
@@ -274,10 +274,10 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
                                                    ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
                                                    alpha=GlobalVars.alpha, beta=GlobalVars.beta, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
             tps_full_traj = (tps_traj, dof_inds)
-            n_steps = len(hmat_seglist)
+            n_steps = len(hmat_seglist) 
             total_tps_cost += tps_cost / float(GlobalVars.alpha)  # Normalize tps cost
             total_pose_cost += pose_costs * float(n_steps) / float(GlobalVars.beta)  # Normalize pose costs
-            total_time_steps += n_steps
+            total_poses += len(bodypart2traj) * n_steps
             handles = []
             if animate:
                 handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
@@ -314,7 +314,7 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
         if not success: break
 
     if not simulate:
-        return total_tps_cost + float(total_pose_cost) / float(total_time_steps)
+        return total_tps_cost, float(total_pose_cost) / float(total_poses)
 
     sim_env.sim.settle(animate=animate)
     sim_env.sim.release_rope('l')
@@ -399,15 +399,16 @@ def regcost_feature_fn(sim_env, state, action):
    
 def regcost_trajopt_feature_fn(sim_env, state, action):
     regcost = registration_cost_cheap(state[1], get_ds_cloud(sim_env, action))
-    trajopt_err = compute_trans_traj(sim_env, state[1], GlobalVars.actions[action], simulate=False)
+    pose_cost = compute_trans_traj(sim_env, state[1], GlobalVars.actions[action], simulate=False)
 
     # don't rescale by alpha and beta
-    # trajopt_err should already be normalized by 1/n_steps and rescaled by 1/beta
+    # pose_cost should already be normalized by 1/n_steps and rescaled by 1/beta
     # (original trajopt cost has constant multiplier of beta/n_steps)
-    print "Regcost:", float(regcost) / get_ds_cloud(sim_env, action).shape[0], "Total", float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err)
+    print "Regcost:", float(regcost) / get_ds_cloud(sim_env, action).shape[0], "Total", float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(pose_cost)
     GlobalVars.tps_errors_top10.append(float(regcost) / get_ds_cloud(sim_env, action).shape[0])
-    GlobalVars.trajopt_errors_top10.append(float(trajopt_err))
-    return np.array([float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(trajopt_err)])  # TODO: Consider regcost + C*err
+    GlobalVars.trajopt_errors_top10.append(float(pose_cost))
+    print "tps_cost, tps_pose_cost", float(regcost) / get_ds_cloud(sim_env, action).shape[0], pose_cost
+    return np.array([float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(pose_cost)])  # TODO: Consider regcost + C*err
 
 def regcost_trajopt_tps_feature_fn(sim_env, state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
@@ -446,8 +447,9 @@ def regcost_trajopt_tps_feature_fn(sim_env, state, action):
 def jointopt_feature_fn(sim_env, state, action):
     # Interfaces with the jointopt code to return a cost (corresponding to the value
     # of the objective function)
-    tps_pose_err = compute_trans_traj_jointopt(sim_env, state[1], GlobalVars.actions[action], simulate=False)
-    return np.array([tps_pose_err])
+    tps_cost, tps_pose_cost = compute_trans_traj_jointopt(sim_env, state[1], GlobalVars.actions[action], simulate=False)
+    print "tps_cost, tps_pose_cost", tps_cost, tps_pose_cost
+    return np.array([tps_cost + tps_pose_cost])
 
 def q_value_fn_regcost(sim_env, state, action):
     return np.dot(WEIGHTS, regcost_feature_fn(sim_env, state, action)) #+ w0
