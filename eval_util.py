@@ -158,7 +158,9 @@ def load_task_results_step(fname, sim_env, task_index, step_index):
             full_traj = (np.empty((0,0)), [])
         full_trajs.append(full_traj)
     q_values = result_file[task_index][step_index]['values'][()]
-    return best_action, full_trajs, q_values
+    trans = result_file[task_index][step_index]['trans'][()]
+    rots = result_file[task_index][step_index]['rots'][()]
+    return best_action, full_trajs, q_values, trans, rots
 
 def traj_collisions(sim_env, full_traj, collision_dist_threshold, n=100):
     """

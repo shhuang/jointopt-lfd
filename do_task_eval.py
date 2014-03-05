@@ -46,6 +46,9 @@ def get_ds_cloud(sim_env, action):
 def redprint(msg):
     print colorize.colorize(msg, "red", bold=True)
 
+def yellowprint(msg):
+    print colorize.colorize(msg, "yellow", bold=True)
+
 def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=False, simulate=True):
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
@@ -656,7 +659,7 @@ def replay_on_holdout(args, sim_env):
     
             eval_stats = eval_util.EvalStats()
 
-            best_action, full_trajs, q_values = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
+            best_action, full_trajs, q_values, trans, rots = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
             
             time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
 
@@ -671,6 +674,11 @@ def replay_on_holdout(args, sim_env):
             if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
                 time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
             print "BEST ACTION:", best_action
+
+            replay_trans, replay_rots = sim_util.get_rope_transforms(sim_env)
+            if np.linalg.norm(trans - replay_trans) > 0 or np.linalg.norm(rots - replay_rots) > 0:
+                yellowprint("The rope transforms of the replay rope doesn't match the ones in the original result file")
+            
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values)
             
             if not eval_stats.found_feasible_action:
