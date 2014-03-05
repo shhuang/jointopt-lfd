@@ -516,6 +516,7 @@ def parse_input_args():
         default=[0,0,0,0,0,0], help="translation=(tx,ty,tz), axis-angle rotation=(rx,ry,rz)")
     parser.add_argument("--random_seed", type=int, default=None)
     parser.add_argument("--log", type=str, default="")
+    parser.add_argument("--print_mean_and_var", action="store_true")
 
     subparsers = parser.add_subparsers(dest='subparser_name')
 
@@ -526,7 +527,6 @@ def parse_input_args():
     parser_eval.add_argument("--alpha", type=int, default=20)
     parser_eval.add_argument("--beta", type=int, default=10)
     parser_eval.add_argument("--gripper_weighting", action="store_true")
-    parser_eval.add_argument("--print_mean_and_var", action="store_true")
     
     parser_replay = subparsers.add_parser('replay')
     parser_replay.add_argument("loadresultfile", type=str)
