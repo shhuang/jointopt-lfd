@@ -242,9 +242,8 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
             ee_link_name = "%s_gripper_tool_frame"%lr
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
-            with util.suppress_stdout():
-                new_joint_traj = planning.plan_follow_traj(sim_env.robot, manip_name,
-                                                           sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = GlobalVars.beta)[0]
+            new_joint_traj = planning.plan_follow_traj(sim_env.robot, manip_name,
+                                                       sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = GlobalVars.beta)[0]
             part_name = {"l":"larm", "r":"rarm"}[lr]
             bodypart2traj[part_name] = new_joint_traj
             ################################    
@@ -385,11 +384,10 @@ def follow_trajectory_cost(sim_env, target_ee_traj, old_joint_traj, robot):
         manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
         ee_link_name = "%s_gripper_tool_frame"%lr
         ee_link = robot.GetLink(ee_link_name)
-        with util.suppress_stdout():
-            traj, pos_errs = planning.plan_follow_traj(robot, manip_name,
-                                   ee_link, target_ee_traj[lr], old_joint_traj[lr], beta = GlobalVars.beta)
-            feasible_trajs[lr] = traj
-            err += pos_errs
+        traj, pos_errs = planning.plan_follow_traj(robot, manip_name,
+                               ee_link, target_ee_traj[lr], old_joint_traj[lr], beta = GlobalVars.beta)
+        feasible_trajs[lr] = traj
+        err += pos_errs
     return feasible_trajs, err
 
 def regcost_feature_fn(sim_env, state, action):
