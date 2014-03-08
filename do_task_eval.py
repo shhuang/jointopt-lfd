@@ -379,7 +379,6 @@ def simulate_demo_traj(sim_env, new_xyz, seg_info, full_trajs, animate=False, in
 
 def follow_trajectory_cost(sim_env, target_ee_traj, old_joint_traj, robot):
     # assumes that target_traj has already been resampled
-    sim_util.reset_arms_to_side(sim_env)
     err = 0
     feasible_trajs = {}
     for lr in 'lr':
@@ -431,14 +430,15 @@ def regcost_trajopt_tps_feature_fn(sim_env, state, action):
     # Add trajectory positions to new_pts and demo_pts, before calling registration_cost_cheap
     orig_traj_positions = []
     feasible_traj_positions = []
-    for lr in 'lr': 
-        for i_step in range(orig_joint_trajs[lr].shape[0]):
-            sim_env.robot.SetDOFValues(orig_joint_trajs[lr][i_step], arm_inds[lr])
-            tf = ee_links[lr].GetTransform()
-            orig_traj_positions.append(tf[:3,3])
-            sim_env.robot.SetDOFValues(feasible_trajs[lr][i_step], arm_inds[lr])
-            tf = ee_links[lr].GetTransform()
-            feasible_traj_positions.append(tf[:3,3])
+    with openravepy.RobotStateSaver(sim_env.robot):
+        for lr in 'lr': 
+            for i_step in range(orig_joint_trajs[lr].shape[0]):
+                sim_env.robot.SetDOFValues(orig_joint_trajs[lr][i_step], arm_inds[lr])
+                tf = ee_links[lr].GetTransform()
+                orig_traj_positions.append(tf[:3,3])
+                sim_env.robot.SetDOFValues(feasible_trajs[lr][i_step], arm_inds[lr])
+                tf = ee_links[lr].GetTransform()
+                feasible_traj_positions.append(tf[:3,3])
 
     new_pts_traj = np.r_[new_pts, np.array(feasible_traj_positions)]
     demo_pts_traj = np.r_[demo_pts, np.array(orig_traj_positions)]
@@ -679,7 +679,7 @@ def replay_on_holdout(args, sim_env):
 
             replay_trans, replay_rots = sim_util.get_rope_transforms(sim_env)
             if np.linalg.norm(trans - replay_trans) > 0 or np.linalg.norm(rots - replay_rots) > 0:
-                yellowprint("The rope transforms of the replay rope doesn't match the ones in the original result file")
+                yellowprint("The rope transforms of the replay rope doesn't match the ones in the original result file by %f and %f" % (np.linalg.norm(trans - replay_trans), np.linalg.norm(rots - replay_rots)))
             
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values)
             
