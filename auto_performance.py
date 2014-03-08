@@ -16,9 +16,7 @@ def estimate_performance(results_file):
     misgrasps_logged = True
     timing_logged = True
 
-    #for i_task in range(len(results_file)):
-    for i_task in results_file:
-        task_info = results_file[str(i_task)]
+    for (i_task, task_info) in sorted(results_file.iteritems(), key=lambda item: int(item[0])):
         knot_exists = False
         infeasible = False
         misgrasp = False
