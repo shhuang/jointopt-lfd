@@ -642,7 +642,7 @@ def replay_on_holdout(args, sim_env):
         print "task %s" % i_task
         sim_util.reset_arms_to_side(sim_env)
         redprint("Replace rope")
-#         rope_nodes, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task) # TODO temporary since results file don't have right rope_nodes
+#         rope_nodes, _, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task) # TODO temporary since results file don't have right rope_nodes
         rope_nodes = demo_id_rope_nodes["rope_nodes"][:]
         # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
         time_machine = sim_util.RopeSimTimeMachine(rope_nodes, sim_env)
