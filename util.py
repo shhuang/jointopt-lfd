@@ -8,6 +8,10 @@ import h5py
 import IPython as ipy
 import os 
 
+class Bunch(object):
+  def __init__(self, adict):
+    self.__dict__.update(adict)
+
 # Define a context manager to suppress stdout
 class suppress_stdout(object):
     '''

@@ -476,9 +476,8 @@ def set_global_vars(args, sim_env):
     if args.subparser_name == "eval":
         GlobalVars.gripper_weighting = args.gripper_weighting
 
-def select_fns(args):
+def select_feature_fn(args):
     # feature_fn is used to select the best action (i.e. demonstration)
-    # compute_traj_fn is used to compute the transferred trajectory
 
     if args.warpingcost == "regcost":
         feature_fn = regcost_feature_fn
@@ -488,13 +487,15 @@ def select_fns(args):
         feature_fn = regcost_trajopt_tps_feature_fn
     else:
         feature_fn = jointopt_feature_fn
+    return feature_fn
 
+def select_traj_fn(args):
+    # compute_traj_fn is used to compute the transferred trajectory
     if args.jointopt:
         compute_traj_fn = compute_trans_traj_jointopt
     else:
         compute_traj_fn = compute_trans_traj
-
-    return feature_fn, compute_traj_fn
+    return compute_traj_fn
 
 def parse_input_args():
     parser = argparse.ArgumentParser()
@@ -535,6 +536,7 @@ def parse_input_args():
     
     parser_replay = subparsers.add_parser('replay')
     parser_replay.add_argument("loadresultfile", type=str)
+    parser_replay.add_argument("--compute_traj_steps", type=int, default=[], nargs='*', metavar='i_step')
 
     return parser.parse_args()
 
@@ -562,7 +564,8 @@ def select_best_action(sim_env, state, num_actions_to_try, feature_fn, eval_stat
     return agenda, q_values_root
 
 def eval_on_holdout(args, sim_env):
-    feature_fn, compute_traj_fn = select_fns(args)
+    feature_fn = select_feature_fn(args)
+    compute_traj_fn = select_traj_fn(args)
     holdoutfile = h5py.File(args.holdoutfile, 'r')
     tasks = eval_util.get_specified_tasks(args.tasks, args.taskfile, args.i_start, args.i_end)
     holdout_items = eval_util.get_holdout_items(holdoutfile, tasks)
@@ -581,7 +584,7 @@ def eval_on_holdout(args, sim_env):
         if args.animation:
             sim_env.viewer.Step()
 
-        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes)
+        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes, args)
 
         for i_step in range(args.num_steps):
             print "task %s step %i" % (i_task, i_step)
@@ -642,15 +645,15 @@ def replay_on_holdout(args, sim_env):
         print "task %s" % i_task
         sim_util.reset_arms_to_side(sim_env)
         redprint("Replace rope")
-#         rope_nodes, _, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task) # TODO temporary since results file don't have right rope_nodes
-        rope_nodes = demo_id_rope_nodes["rope_nodes"][:]
+        rope_nodes, _, loaded_args, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task)
+#         rope_nodes = demo_id_rope_nodes["rope_nodes"][:] # TODO temporary since results file don't have right rope_nodes
         # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
         time_machine = sim_util.RopeSimTimeMachine(rope_nodes, sim_env)
 
         if args.animation:
             sim_env.viewer.Step()
 
-        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes)
+        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes, args)
 
         for i_step in range(args.num_steps):
             print "task %s step %i" % (i_task, i_step)
@@ -663,12 +666,19 @@ def replay_on_holdout(args, sim_env):
 
             best_action, full_trajs, q_values, trans, rots = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
             
-            time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
-
-            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
-            start_time = time.time()
-            eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_xyz, GlobalVars.actions[best_action], full_trajs, animate=args.animation, interactive=args.interactive)
-            eval_stats.exec_elapsed_time += time.time() - start_time
+            if i_step in args.compute_traj_steps:
+                compute_traj_fn = select_traj_fn(loaded_args)
+                time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
+                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
+                start_time = time.time()
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_xyz, GlobalVars.actions[best_action], animate=args.animation, interactive=args.interactive)
+                eval_stats.exec_elapsed_time += time.time() - start_time
+            else:
+                time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
+                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
+                start_time = time.time()
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_xyz, GlobalVars.actions[best_action], full_trajs, animate=args.animation, interactive=args.interactive)
+                eval_stats.exec_elapsed_time += time.time() - start_time
 
             if eval_stats.feasible:
                  eval_stats.found_feasible_action = True
