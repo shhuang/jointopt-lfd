@@ -515,8 +515,8 @@ def parse_input_args():
     parser.add_argument("--i_start", type=int, default=-1, metavar="i_task")
     parser.add_argument("--i_end", type=int, default=-1, metavar="i_task")
     
-    parser.add_argument("--camera_matrix_file", type=str, default='.camera_matrix.npy')
-    parser.add_argument("--window_prop_file", type=str, default='.win_prop.npy')
+    parser.add_argument("--camera_matrix_file", type=str, default='.camera_matrix.txt')
+    parser.add_argument("--window_prop_file", type=str, default='.win_prop.txt')
     parser.add_argument("--fake_data_segment",type=str, default='demo1-seg00')
     parser.add_argument("--fake_data_transform", type=float, nargs=6, metavar=("tx","ty","tz","rx","ry","rz"),
         default=[0,0,0,0,0,0], help="translation=(tx,ty,tz), axis-angle rotation=(rx,ry,rz)")
@@ -735,19 +735,25 @@ def load_simulation(args, sim_env):
         sim_env.viewer = trajoptpy.GetViewer(sim_env.env)
         if args.animation > 1 and os.path.isfile(args.window_prop_file) and os.path.isfile(args.camera_matrix_file):
             print "loading window and camera properties"
-            window_prop = np.load(args.window_prop_file)
-            camera_matrix = np.load(args.camera_matrix_file)
-            sim_env.viewer.SetWindowProp(*window_prop)
-            sim_env.viewer.SetCameraManipulatorMatrix(camera_matrix)
+            window_prop = np.loadtxt(args.window_prop_file)
+            camera_matrix = np.loadtxt(args.camera_matrix_file)
+            try:
+                sim_env.viewer.SetWindowProp(*window_prop)
+                sim_env.viewer.SetCameraManipulatorMatrix(camera_matrix)
+            except:
+                print "SetWindowProp and SetCameraManipulatorMatrix are not defined. Pull and recompile Trajopt."
         else:
             print "move viewer to viewpoint that isn't stupid"
             print "then hit 'p' to continue"
             sim_env.viewer.Idle()
             print "saving window and camera properties"
-            window_prop = sim_env.viewer.GetWindowProp()
-            camera_matrix = sim_env.viewer.GetCameraManipulatorMatrix()
-            np.save(args.window_prop_file, window_prop)
-            np.save(args.camera_matrix_file, camera_matrix)
+            try:
+                window_prop = sim_env.viewer.GetWindowProp()
+                camera_matrix = sim_env.viewer.GetCameraManipulatorMatrix()
+                np.savetxt(args.window_prop_file, window_prop, fmt='%d')
+                np.savetxt(args.camera_matrix_file, camera_matrix)
+            except:
+                print "GetWindowProp and GetCameraManipulatorMatrix are not defined. Pull and recompile Trajopt."
 
 def main():
     args = parse_input_args()
