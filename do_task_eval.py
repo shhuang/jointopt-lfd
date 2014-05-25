@@ -4,17 +4,19 @@ from __future__ import division
 
 import pprint
 import argparse
-import planning, tps_registration, eval_util, sim_util, util
-
+import planning, eval_util, sim_util, util
+import tps_registration as tps_registration_old
+from rapprentice import tps_registration
+ 
 from rapprentice import registration, colorize, berkeley_pr2, \
      animate_traj, ros2rave, plotting_openrave, task_execution, \
      tps, func_utils, resampling, ropesim, rope_initialization, clouds
 from rapprentice import math_utils as mu
 from rapprentice.yes_or_no import yes_or_no
 import pdb, time
-
+ 
 import cloudprocpy, trajoptpy, openravepy
-from rope_qlearn import *
+import rope_qlearn
 from knot_classifier import isKnot as is_knot
 import os, os.path, numpy as np, h5py
 from numpy import asarray
@@ -39,9 +41,19 @@ class GlobalVars:
     gripper_weighting = False
     tps_errors_top10 = []
     trajopt_errors_top10 = []
+    actions_ds_clouds = {}
 
 def get_ds_cloud(sim_env, action):
-    return clouds.downsample(GlobalVars.actions[action]['cloud_xyz'], DS_SIZE)
+    if action not in GlobalVars.actions_ds_clouds:
+        GlobalVars.actions_ds_clouds[action] = clouds.downsample(GlobalVars.actions[action]['cloud_xyz'], DS_SIZE)
+    return GlobalVars.actions_ds_clouds[action]
+
+def color_cloud(xyz, endpoint_inds, endpoint_color = np.array([0,0,1]), non_endpoint_color = np.array([1,0,0])):
+    xyzrgb = np.zeros((len(xyz),6))
+    xyzrgb[:,:3] = xyz  
+    xyzrgb[endpoint_inds,3:] = np.tile(endpoint_color, (endpoint_inds.sum(), 1))
+    xyzrgb[~endpoint_inds,3:] = np.tile(non_endpoint_color, ((~endpoint_inds).sum(), 1))
+    return xyzrgb
 
 def redprint(msg):
     print colorize.colorize(msg, "red", bold=True)
@@ -49,29 +61,46 @@ def redprint(msg):
 def yellowprint(msg):
     print colorize.colorize(msg, "yellow", bold=True)
 
-def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=False, simulate=True):
+def draw_grid(sim_env, old_xyz, f, color = (1,1,0,1)):
+    grid_means = .5 * (old_xyz.max(axis=0) + old_xyz.min(axis=0))
+    grid_mins = grid_means - (old_xyz.max(axis=0) - old_xyz.min(axis=0))
+    grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
+    return plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = color)
+
+def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, interactive=False, simulate=True):
+    seg_info = GlobalVars.actions[action]
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
     
     redprint("Generating end-effector trajectory")    
     
-    old_xyz = np.squeeze(seg_info["cloud_xyz"])
-    old_xyz = clouds.downsample(old_xyz, DS_SIZE)
-    new_xyz = clouds.downsample(new_xyz, DS_SIZE)
+    cloud_dim = 6 if use_color else 3
+    new_cloud = new_cloud[:,:cloud_dim]
+    old_cloud = get_ds_cloud(sim_env, action)[:,:cloud_dim]
     
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
     if GlobalVars.gripper_weighting:
         interest_pts = get_closing_pts(seg_info)
+        raise NonImplementedError
     else:
         interest_pts = None
-    lr2eetraj, _, old_xyz_warped = warp_hmats(old_xyz, new_xyz, hmat_list, interest_pts)
+    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+    lr2eetraj = {}
+    for k, hmats in hmat_list:
+        lr2eetraj[k] = f.transform_hmats(hmats)
 
     handles = []
     if animate:
-        handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-        handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
-        handles.append(sim_env.env.plot3(old_xyz_warped,5, (0,1,0)))
+        handles.append(sim_env.env.plot3(old_cloud[:,:3], 5, (1,0,0)))
+        handles.append(sim_env.env.plot3(new_cloud[:,:3], 5, new_cloud[:,3:] if use_color else (0,0,1)))
+        handles.append(sim_env.env.plot3(f.transform_points(old_cloud[:,:3]), 5, old_cloud[:,3:] if use_color else (0,1,0)))
+        handles.extend(draw_grid(sim_env, old_cloud[:,:3], f))
+        for k, old_hmats in hmat_list:
+            handles.append(sim_env.env.drawlinestrip(old_hmats[:,:3,3], 2, (1,0,0,1)))
+        for transformed_hmats in lr2eetraj.values():
+            handles.append(sim_env.env.drawlinestrip(transformed_hmats[:,:3,3], 2, (0,1,0,1)))
+        sim_env.viewer.Step()
 
     miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
     success = True
@@ -102,7 +131,7 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=Fa
         ####
 
         ### Generate fullbody traj
-        bodypart2traj = {}
+        lr2newtraj = {}
 
         for (lr,old_joint_traj) in lr2oldtraj.items():
             
@@ -116,15 +145,18 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=Fa
             print "planning trajectory following"
             new_joint_traj, pose_errs = planning.plan_follow_traj(sim_env.robot, manip_name,
                                                        sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta=GlobalVars.beta)
+            if animate:
+                handles.append(sim_env.env.drawlinestrip(sim_util.get_ee_traj(sim_env, lr, new_joint_traj)[:,:3,3], 2, (0,0,1,1)))
+                sim_env.viewer.Step()
+            
             n_steps = len(new_ee_traj_rs)
             total_pose_cost += pose_errs * float(n_steps) / float(GlobalVars.beta)   # Normalize pos error
             total_poses += n_steps
 
-            part_name = {"l":"larm", "r":"rarm"}[lr]
-            bodypart2traj[part_name] = new_joint_traj
+            lr2newtraj[lr] = new_joint_traj
             ################################    
-            redprint("Executing joint trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
-        full_traj = sim_util.getFullTraj(sim_env, bodypart2traj)
+        redprint("Executing joint trajectory for part %i using arms '%s'"%(i_miniseg, lr2newtraj.keys()))
+        full_traj = sim_util.get_full_traj(sim_env, lr2newtraj)
         full_trajs.append(full_traj)
         if not simulate:
             continue
@@ -161,15 +193,16 @@ def compute_trans_traj(sim_env, new_xyz, seg_info, animate=False, interactive=Fa
     
     return success, feasible, misgrasp, full_trajs
 
-def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, interactive=False, simulate=True):
+def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=False, interactive=False, simulate=True):
+    seg_info = GlobalVars.actions[action]
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
     
     redprint("Generating end-effector trajectory")    
     
-    old_xyz = np.squeeze(seg_info["cloud_xyz"])
-    old_xyz = clouds.downsample(old_xyz, DS_SIZE)
-    new_xyz = clouds.downsample(new_xyz, DS_SIZE)
+    cloud_dim = 6 if use_color else 3
+    new_cloud = new_cloud[:,:cloud_dim]
+    old_cloud = get_ds_cloud(sim_env, action)[:,:cloud_dim]
 
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
@@ -179,31 +212,24 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
         raise NonImplementedError
     else:
         interest_pts = None
-#     lr2eetraj = warp_hmats(old_xyz, new_xyz, hmat_list, interest_pts)[0]
-    
-    scaled_xyz_src, src_params = registration.unit_boxify(old_xyz)
-    scaled_xyz_targ, targ_params = registration.unit_boxify(new_xyz)
-    f,g, xtarg_nd, bend_coef, wt_n, rot_coef = tps_registration.tps_rpm_bij(scaled_xyz_src, scaled_xyz_targ, plot_cb=None,
-                                   plotting=0, rot_reg=np.r_[1e-4, 1e-4, 1e-1], 
-                                   n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2,
-                                   x_weights=None)
-    f = registration.unscale_tps(f, src_params, targ_params)
-    unscaled_xtarg_nd = tps_registration.unscale_tps_points(xtarg_nd, targ_params[0], targ_params[1]) # should be close to new_xyz but with the same number of points as old_xyz
-
-    handles = []
-    if animate:
-        handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-        handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
-        handles.append(sim_env.env.plot3(f.transform_points(old_xyz),5, (0,1,0)))
-        grid_means = .5 * (old_xyz.max(axis=0) + old_xyz.min(axis=0))
-        grid_mins = grid_means - (old_xyz.max(axis=0) - old_xyz.min(axis=0))
-        grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
-        handles.extend(plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (1,1,0,1)))
-    
+    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
 
+    handles = []
+    handles_f = [] # handles that depend on the transformation f
+    if animate:
+        handles.append(sim_env.env.plot3(old_cloud[:,:3], 5, (1,0,0)))
+        handles.append(sim_env.env.plot3(new_cloud[:,:3], 5, new_cloud[:,3:] if use_color else (0,0,1)))
+        handles_f.append(sim_env.env.plot3(f.transform_points(old_cloud[:,:3]), 5, old_cloud[:,3:] if use_color else (0,1,0)))
+        handles_f.extend(draw_grid(sim_env, old_cloud[:,:3], f))
+        for k, old_hmats in hmat_list:
+            handles.append(sim_env.env.drawlinestrip(old_hmats[:,:3,3], 2, (1,0,0,1)))
+        for transformed_hmats in lr2eetraj.values():
+            handles_f.append(sim_env.env.drawlinestrip(transformed_hmats[:,:3,3], 2, (0,1,0,1)))
+        sim_env.viewer.Step()
+    
     miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
     print colorize.colorize("mini segments:", "red"), miniseg_starts, miniseg_ends
     success = True
@@ -234,7 +260,7 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
         ####
 
         ### Generate fullbody traj
-        bodypart2traj = {}
+        lr2newtraj = {}
         redprint("Optimizing JOINT ANGLE trajectory for part %i"%i_miniseg)
         for (lr,old_joint_traj) in lr2oldtraj.items():
             
@@ -247,20 +273,18 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             new_joint_traj = planning.plan_follow_traj(sim_env.robot, manip_name,
                                                        sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = GlobalVars.beta)[0]
-            part_name = {"l":"larm", "r":"rarm"}[lr]
-            bodypart2traj[part_name] = new_joint_traj
+            lr2newtraj[lr] = new_joint_traj
             ################################    
-        redprint("Finished JOINT ANGLE trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
-        dof_inds = sim_util.getFullTraj(sim_env, bodypart2traj)[1]
+        redprint("Finished JOINT ANGLE trajectory for part %i using arms '%s'"%(i_miniseg, lr2newtraj.keys()))
+        dof_inds = sim_util.get_full_traj(sim_env, lr2newtraj)[1]
         
-        if len(bodypart2traj) > 0:
+        if len(lr2newtraj) > 0:
             manip_names = []
             ee_links = []
             hmat_seglist = []
             old_trajs = []
             redprint("Optimizing TPS trajectory for part %i"%i_miniseg)
-            for (part_name, traj) in bodypart2traj.items():
-                lr = part_name[0]
+            for (lr, traj) in lr2newtraj.items():
                 manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
                 manip_names.append(manip_name)
                 ee_link_name = "%s_gripper_tool_frame"%lr
@@ -270,22 +294,27 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
                 hmat_seglist.append(new_ee_traj_rs)
                 old_trajs.append(traj)
            
+            wt_n = corr.sum(axis=1)
+            xtarg_nd = (corr/wt_n[:,None]).dot(new_cloud[:,:3])
             tps_traj, f_new, tps_cost, pose_costs = planning.joint_fit_tps_follow_traj(sim_env.robot, '+'.join(manip_names),
-                                                   ee_links, f, hmat_seglist, old_trajs, old_xyz, unscaled_xtarg_nd,
-                                                   alpha=GlobalVars.alpha, beta=GlobalVars.beta, bend_coef=bend_coef, rot_coef = rot_coef, wt_n=wt_n)
+                                                   ee_links, f, hmat_seglist, old_trajs, old_cloud[:,:3], xtarg_nd,
+                                                   alpha=GlobalVars.alpha, beta=GlobalVars.beta, bend_coef=f._bend_coef, rot_coef=f._rot_coef, wt_n=wt_n)
             tps_full_traj = (tps_traj, dof_inds)
             n_steps = len(hmat_seglist) 
             total_tps_cost += tps_cost / float(GlobalVars.alpha)  # Normalize tps cost
             total_pose_cost += pose_costs * float(n_steps) / float(GlobalVars.beta)  # Normalize pose costs
-            total_poses += len(bodypart2traj) * n_steps
-            handles = []
-            if animate:
-                handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-                handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
-                handles.append(sim_env.env.plot3(f_new.transform_points(old_xyz),5, (0,1,0)))
-                handles.extend(plotting_openrave.draw_grid(sim_env.env, f_new.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = (0,1,1,1)))
+            total_poses += len(lr2newtraj) * n_steps
 
-            redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, bodypart2traj.keys()))
+            if animate:
+                del handles_f[:]
+                handles_f.append(sim_env.env.plot3(f_new.transform_points(old_cloud[:,:3]), 5, old_cloud[:,3:] if use_color else (0,1,0)))
+                handles_f.extend(draw_grid(sim_env, old_cloud[:,:3], f_new))
+                for lr in lr2newtraj.keys():
+                    handles_f.append(sim_env.env.drawlinestrip(f_new.transform_hmats(hmat_dict[lr][i_start:i_end+1])[:,:3,3], 2, (0,1,0,1)))
+                    handles.append(sim_env.env.drawlinestrip(sim_util.get_ee_traj(sim_env, lr, tps_traj)[:,:3,3], 2, (0,0,1,1)))
+                sim_env.viewer.Step()
+
+            redprint("Finished TPS trajectory for part %i using arms '%s'"%(i_miniseg, lr2newtraj.keys()))
         else:
             tps_full_traj = (np.zeros((0,0)), [])
         full_trajs.append(tps_full_traj)
@@ -325,17 +354,33 @@ def compute_trans_traj_jointopt(sim_env, new_xyz, seg_info, animate=False, inter
     
     return success, feasible, misgrasp, full_trajs
 
-def simulate_demo_traj(sim_env, new_xyz, seg_info, full_trajs, animate=False, interactive=False):
+def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animate=False, interactive=False):
+    seg_info = GlobalVars.actions[action]
     sim_util.reset_arms_to_side(sim_env)
-    
-    old_xyz = np.squeeze(seg_info["cloud_xyz"])
-    old_xyz = clouds.downsample(old_xyz, DS_SIZE)
-    new_xyz = clouds.downsample(new_xyz, DS_SIZE)
-    
+
+    cloud_dim = 6 if use_color else 3
+    new_cloud = new_cloud[:,:cloud_dim]
+    old_cloud = get_ds_cloud(sim_env, action)[:,:cloud_dim]
+
+    if GlobalVars.gripper_weighting:
+        interest_pts = get_closing_pts(seg_info)
+        raise NonImplementedError
+    else:
+        interest_pts = None
+    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+
     handles = []
     if animate:
-        handles.append(sim_env.env.plot3(old_xyz,5, (1,0,0)))
-        handles.append(sim_env.env.plot3(new_xyz,5, (0,0,1)))
+        handles.append(sim_env.env.plot3(old_cloud[:,:3], 5, (1,0,0)))
+        handles.append(sim_env.env.plot3(new_cloud[:,:3], 5, new_cloud[:,3:] if use_color else (0,0,1)))
+        handles.append(sim_env.env.plot3(f.transform_points(old_cloud[:,:3]), 5, old_cloud[:,3:] if use_color else (0,1,0)))
+        handles.extend(draw_grid(sim_env, old_cloud[:,:3], f))
+        for lr in 'lr':
+            link_name = "%s_gripper_tool_frame"%lr
+            old_ee_traj = asarray(seg_info[link_name]["hmat"])
+            handles.append(sim_env.env.drawlinestrip(old_ee_traj[:,:3,3], 2, (1,0,0,1)))
+            handles.append(sim_env.env.drawlinestrip(f.transform_hmats(old_ee_traj)[:,:3,3], 2, (0,1,0,1)))
+        sim_env.viewer.Step()
 
     miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
     success = True
@@ -347,6 +392,12 @@ def simulate_demo_traj(sim_env, new_xyz, seg_info, full_trajs, animate=False, in
         if i_miniseg >= len(full_trajs): break           
 
         full_traj = full_trajs[i_miniseg]
+
+        if animate:
+            if len(full_traj[0]) > 0: # the robot's arm might not move but the grippers might still open or close
+                for lr in 'lr':
+                    handles.append(sim_env.env.drawlinestrip(sim_util.get_ee_traj(sim_env, lr, full_traj)[:,:3,3], 2, (0,0,1,1)))
+            sim_env.viewer.Step()
 
         for lr in 'lr':
             gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_start])
@@ -377,24 +428,12 @@ def simulate_demo_traj(sim_env, new_xyz, seg_info, full_trajs, animate=False, in
     
     return success, feasible, misgrasp, full_trajs
 
-def follow_trajectory_cost(sim_env, target_ee_traj, old_joint_traj, robot):
-    # assumes that target_traj has already been resampled
-    err = 0
-    feasible_trajs = {}
-    for lr in 'lr':
-        n_steps = len(target_ee_traj[lr])
-        manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
-        ee_link_name = "%s_gripper_tool_frame"%lr
-        ee_link = robot.GetLink(ee_link_name)
-        traj, pos_errs = planning.plan_follow_traj(robot, manip_name,
-                               ee_link, target_ee_traj[lr], old_joint_traj[lr], beta = GlobalVars.beta)
-        feasible_trajs[lr] = traj
-        err += pos_errs
-    return feasible_trajs, err
-
-def regcost_feature_fn(sim_env, state, action):
-    regcost = registration_cost_cheap(state[1], get_ds_cloud(sim_env, action))
-    return np.array([float(regcost) / get_ds_cloud(sim_env, action).shape[0]])
+def regcost_feature_fn(sim_env, state, action, use_color):
+    new_cloud = state[1]
+    old_cloud = get_ds_cloud(sim_env, action)
+    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=8, em_iter=1, vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+    cost = registration.tps_reg_cost(f)
+    return np.array([float(cost)]) # no need to normalize since bending cost is independent of number of points
    
 def regcost_trajopt_feature_fn(sim_env, state, action):
     regcost = registration_cost_cheap(state[1], get_ds_cloud(sim_env, action))
@@ -451,9 +490,6 @@ def jointopt_feature_fn(sim_env, state, action):
     print "tps_cost, tps_pose_cost", tps_cost, tps_pose_cost
     return np.array([tps_cost + tps_pose_cost])
 
-def q_value_fn_regcost(sim_env, state, action):
-    return np.dot(WEIGHTS, regcost_feature_fn(sim_env, state, action)) #+ w0
-
 def q_value_fn(state, action, sim_env, fn):
     return np.dot(WEIGHTS, fn(sim_env, state, action)) #+ w0
 
@@ -475,18 +511,16 @@ def set_global_vars(args, sim_env):
     GlobalVars.actions = h5py.File(args.actionfile, 'r')
     if args.subparser_name == "eval":
         GlobalVars.gripper_weighting = args.gripper_weighting
-
-def select_feature_fn(args):
-    # feature_fn is used to select the best action (i.e. demonstration)
-
-    if args.warpingcost == "regcost":
-        feature_fn = regcost_feature_fn
-    elif args.warpingcost == "regcost-trajopt":
-        feature_fn = regcost_trajopt_feature_fn
-    elif args.warpingcost == "regcost-trajopt-tps":
-        feature_fn = regcost_trajopt_tps_feature_fn
+    
+def select_feature_fn(warping_cost, args):
+    if warping_cost == "regcost":
+        feature_fn = lambda sim_env, state, action: regcost_feature_fn(sim_env, state, action, args.use_color)
+    elif warping_cost == "regcost-trajopt":
+        feature_fn = lambda sim_env, state, action: regcost_trajopt_feature_fn(sim_env, state, action, args.use_color)
+    elif warping_cost == "regcost-trajopt-tps":
+        feature_fn = lambda sim_env, state, action: regcost_trajopt_tps_feature_fn(sim_env, state, action, args.use_color)
     else:
-        feature_fn = jointopt_feature_fn
+        feature_fn = lambda sim_env, state, action: jointopt_feature_fn(sim_env, state, action, args.use_color)
     return feature_fn
 
 def select_traj_fn(args):
@@ -533,10 +567,11 @@ def parse_input_args():
     parser_eval.add_argument("--beta", type=int, default=10)
     parser_eval.add_argument("--gripper_weighting", action="store_true")
     parser_eval.add_argument("--num_steps", type=int, default=5, help="maximum number of steps to simulate each task")
+    parser_eval.add_argument("--use_color", type=int, default=1)
     
     parser_replay = subparsers.add_parser('replay')
     parser_replay.add_argument("loadresultfile", type=str)
-    parser_replay.add_argument("--compute_traj_steps", type=int, default=[], nargs='*', metavar='i_step')
+    parser_replay.add_argument("--compute_traj_steps", type=int, default=[], nargs='*', metavar='i_step', help="recompute trajectories for the i_step of all tasks")
 
     return parser.parse_args()
 
@@ -544,27 +579,31 @@ def get_unique_id():
     GlobalVars.unique_id += 1
     return GlobalVars.unique_id - 1
 
-def select_best_action(sim_env, state, num_actions_to_try, feature_fn, eval_stats, warpingcost):
+def select_best_action(sim_env, state, num_actions_to_try, feature_fn, prune_feature_fn, eval_stats, warpingcost):
     redprint("Choosing an action")
     num_top_actions = max(num_actions_to_try, TRAJOPT_MAX_ACTIONS)
 
     start_time = time.time()
-    q_values_regcost = [(q_value_fn_regcost(sim_env, state, action), action) for action in GlobalVars.actions]
-    agenda_top_actions = sorted(q_values_regcost, key = lambda v: -v[0])[:num_top_actions]
+    q_values_prune = [(q_value_fn(state, action, sim_env, prune_feature_fn), action) for action in GlobalVars.actions]
+    agenda_top_actions = sorted(q_values_prune, key = lambda v: -v[0])[:num_top_actions]
 
-    if warpingcost != "regcost":
+    if feature_fn == prune_feature_fn:
+        q_values = q_values_prune
+        agenda = agenda_top_actions
+    else:
         q_values = [(q_value_fn(state, a, sim_env, feature_fn), a) for (v, a) in agenda_top_actions]
         agenda = sorted(q_values, key = lambda v: -v[0])
-    else:
-        q_values = q_values_regcost
-        agenda = agenda_top_actions
 
     eval_stats.action_elapsed_time += time.time() - start_time
     q_values_root = [q for (q, a) in q_values]
     return agenda, q_values_root
 
 def eval_on_holdout(args, sim_env):
-    feature_fn = select_feature_fn(args)
+    feature_fn = select_feature_fn(args.warpingcost, args)
+    if args.warpingcost == 'regcost':
+        prune_feature_fn = feature_fn # so that we can check for function equality
+    else:
+        prune_feature_fn = select_feature_fn('regcost', args)
     compute_traj_fn = select_traj_fn(args)
     holdoutfile = h5py.File(args.holdoutfile, 'r')
     holdout_items = eval_util.get_holdout_items(holdoutfile, args.tasks, args.taskfile, args.i_start, args.i_end)
@@ -589,22 +628,25 @@ def eval_on_holdout(args, sim_env):
         for i_step in range(args.num_steps):
             print "task %s step %i" % (i_task, i_step)
             sim_util.reset_arms_to_side(sim_env)
-
+            
             redprint("Observe point cloud")
-            new_xyz = sim_env.sim.observe_cloud()
-            state = ("eval_%i"%get_unique_id(), new_xyz)
+            new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
+            if args.use_color:
+                new_cloud = color_cloud(new_cloud, endpoint_inds)
+            new_cloud = clouds.downsample(new_cloud, DS_SIZE)
+            state = ("eval_%i"%get_unique_id(), new_cloud)
     
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
             eval_stats = eval_util.EvalStats()
 
-            agenda, q_values_root = select_best_action(sim_env, state, num_actions_to_try, feature_fn, eval_stats, args.warpingcost)
+            agenda, q_values_root = select_best_action(sim_env, state, num_actions_to_try, feature_fn, prune_feature_fn, eval_stats, args.warpingcost)
 
             time_machine.set_checkpoint('prechoice_%i'%i_step, sim_env)
             for i_choice in range(num_actions_to_try):
                 time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
                 best_root_action = agenda[i_choice][1]
                 start_time = time.time()
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_xyz, GlobalVars.actions[best_root_action], animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud, best_root_action, args.use_color, animate=args.animation, interactive=args.interactive)
                 eval_stats.exec_elapsed_time += time.time() - start_time
 
                 if eval_stats.feasible:  # try next action if TrajOpt cannot find feasible action
@@ -645,8 +687,6 @@ def replay_on_holdout(args, sim_env):
         sim_util.reset_arms_to_side(sim_env)
         redprint("Replace rope")
         rope_nodes, rope_params, loaded_args, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task)
-        # uncomment if the results file don't have the right rope nodes
-        #rope_nodes = demo_id_rope_nodes["rope_nodes"][:]
         # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
         time_machine = sim_util.RopeSimTimeMachine(rope_nodes, sim_env)
 
@@ -660,7 +700,11 @@ def replay_on_holdout(args, sim_env):
             sim_util.reset_arms_to_side(sim_env)
 
             redprint("Observe point cloud")
-            new_xyz = sim_env.sim.observe_cloud()
+            new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
+            if loaded_args.use_color:
+                new_cloud = color_cloud(new_cloud, endpoint_inds)
+            new_cloud = clouds.downsample(new_cloud, DS_SIZE)
+            state = ("eval_%i"%get_unique_id(), new_cloud)
     
             eval_stats = eval_util.EvalStats()
 
@@ -671,9 +715,9 @@ def replay_on_holdout(args, sim_env):
             start_time = time.time()
             if i_step in args.compute_traj_steps:
                 compute_traj_fn = select_traj_fn(loaded_args)
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_xyz, best_action, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud, best_action, loaded_args.use_color, animate=args.animation, interactive=args.interactive)
             else:
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_xyz, best_action, full_trajs, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_cloud, best_action, loaded_args.use_color, full_trajs, animate=args.animation, interactive=args.interactive)
             eval_stats.exec_elapsed_time += time.time() - start_time
 
             if eval_stats.feasible:
