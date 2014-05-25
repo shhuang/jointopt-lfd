@@ -1,7 +1,7 @@
 from __future__ import division
 import openravepy,trajoptpy, numpy as np, json
 import util
-from rapprentice import tps
+from rapprentice import tps, math_utils as mu
 from rapprentice.registration import ThinPlateSpline
 import IPython as ipy
 
@@ -74,14 +74,13 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
     for (cost_type, cost_val) in result.GetCosts():
         if cost_type == 'pose':
             pose_costs += cost_val
-    
+
     pose_costs2 = 0
     with openravepy.RobotStateSaver(robot):
-        poses = [openravepy.poseFromMatrix(hmat) for hmat in new_hmats]
-        for (i_step,pose) in enumerate(poses):
+        for (i_step, hmat) in enumerate(new_hmats):
             robot.SetDOFValues(traj[i_step], arm_inds)
-            new_pose = openravepy.poseFromMatrix(ee_link.GetTransform())
-            pose_err = openravepy.poseMult(openravepy.InvertPose(pose), new_pose)
+            new_hmat = ee_link.GetTransform()
+            pose_err = openravepy.poseFromMatrix(mu.invertHmat(hmat).dot(new_hmat))
             pose_costs2 += np.abs(pose_err[1:7] * beta/n_steps).sum()
     print "pose_costs", pose_costs, pose_costs2
 
@@ -268,9 +267,9 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
         for ee_link, old_hmats in zip(ee_links, old_hmats_list):
             for (i_step, old_hmat) in enumerate(old_hmats):
                 robot.SetDOFValues(traj[i_step], arm_inds)
-                cur_pose = openravepy.poseFromMatrix(ee_link.GetTransform())
-                warped_src_pose = openravepy.poseFromMatrix(f.transform_hmats(np.array([old_hmat]))[0])
-                pose_err = openravepy.poseMult(openravepy.InvertPose(warped_src_pose), cur_pose)
+                cur_hmat = ee_link.GetTransform()
+                warped_src_hmat = f.transform_hmats(old_hmat[None,:,:])[0]
+                pose_err = openravepy.poseFromMatrix(mu.invertHmat(warped_src_hmat).dot(cur_hmat))
                 pose_costs2 += np.abs(pose_err[1:7] * np.array([.1, .1, .1, 1, 1, 1]) * beta/n_steps).sum()
     print "pose_costs", pose_costs, pose_costs2
 
