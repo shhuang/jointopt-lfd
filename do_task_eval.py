@@ -505,8 +505,7 @@ def parse_input_args():
 
     parser.add_argument("--animation", type=int, default=0, help="if greater than 1, the viewer tries to load the window and camera properties without idling at the beginning")
     parser.add_argument("--interactive", action="store_true", help="step animation and optimization if specified")
-    parser.add_argument("--obstacles", type=str, nargs='*', choices=['bookshelve', 'boxes'])
-    parser.add_argument("--num_steps", type=int, default=5, help="maximum number of steps to simulate each task")
+    parser.add_argument("--obstacles", type=str, nargs='*', choices=['bookshelve', 'boxes', 'cylinders'], default=[])
     parser.add_argument("--resultfile", type=str, help="no results are saved if this is not specified")
 
     # selects tasks to evaluate/replay
@@ -533,6 +532,7 @@ def parse_input_args():
     parser_eval.add_argument("--alpha", type=int, default=20)
     parser_eval.add_argument("--beta", type=int, default=10)
     parser_eval.add_argument("--gripper_weighting", action="store_true")
+    parser_eval.add_argument("--num_steps", type=int, default=5, help="maximum number of steps to simulate each task")
     
     parser_replay = subparsers.add_parser('replay')
     parser_replay.add_argument("loadresultfile", type=str)
@@ -567,8 +567,7 @@ def eval_on_holdout(args, sim_env):
     feature_fn = select_feature_fn(args)
     compute_traj_fn = select_traj_fn(args)
     holdoutfile = h5py.File(args.holdoutfile, 'r')
-    tasks = eval_util.get_specified_tasks(args.tasks, args.taskfile, args.i_start, args.i_end)
-    holdout_items = eval_util.get_holdout_items(holdoutfile, tasks)
+    holdout_items = eval_util.get_holdout_items(holdoutfile, args.tasks, args.taskfile, args.i_start, args.i_end)
 
     num_successes = 0
     num_total = 0
@@ -578,13 +577,14 @@ def eval_on_holdout(args, sim_env):
         sim_util.reset_arms_to_side(sim_env)
         redprint("Replace rope")
         rope_nodes = demo_id_rope_nodes["rope_nodes"][:]
+        rope_params = 'default'
         # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
         time_machine = sim_util.RopeSimTimeMachine(rope_nodes, sim_env)
 
         if args.animation:
             sim_env.viewer.Step()
 
-        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes, args)
+        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes, args, rope_params)
 
         for i_step in range(args.num_steps):
             print "task %s step %i" % (i_task, i_step)
@@ -601,7 +601,7 @@ def eval_on_holdout(args, sim_env):
 
             time_machine.set_checkpoint('prechoice_%i'%i_step, sim_env)
             for i_choice in range(num_actions_to_try):
-                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env)
+                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
                 best_root_action = agenda[i_choice][1]
                 start_time = time.time()
                 eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_xyz, GlobalVars.actions[best_root_action], animate=args.animation, interactive=args.interactive)
@@ -614,7 +614,7 @@ def eval_on_holdout(args, sim_env):
                      redprint('TRYING NEXT ACTION')
 
             if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
-                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env)
+                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
             print "BEST ACTION:", best_root_action
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root)
             
@@ -632,30 +632,30 @@ def eval_on_holdout(args, sim_env):
 
         redprint('Eval Successes / Total: ' + str(num_successes) + '/' + str(num_total))
 
-# make args more module (i.e. remove irrelevant args for replay mode)
 def replay_on_holdout(args, sim_env):
     holdoutfile = h5py.File(args.holdoutfile, 'r')
-    tasks = eval_util.get_specified_tasks(args.tasks, args.taskfile, args.i_start, args.i_end)
-    holdout_items = eval_util.get_holdout_items(holdoutfile, tasks)
+    loadresultfile = h5py.File(args.loadresultfile, 'r')
+    loadresult_items = eval_util.get_holdout_items(loadresultfile, args.tasks, args.taskfile, args.i_start, args.i_end)
 
     num_successes = 0
     num_total = 0
     
-    for i_task, demo_id_rope_nodes in holdout_items:
+    for i_task, demo_id_rope_nodes in loadresult_items:
         print "task %s" % i_task
         sim_util.reset_arms_to_side(sim_env)
         redprint("Replace rope")
-        rope_nodes, _, loaded_args, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task)
-#         rope_nodes = demo_id_rope_nodes["rope_nodes"][:] # TODO temporary since results file don't have right rope_nodes
+        rope_nodes, rope_params, loaded_args, _, _ = eval_util.load_task_results_init(args.loadresultfile, i_task)
+        # uncomment if the results file don't have the right rope nodes
+        #rope_nodes = demo_id_rope_nodes["rope_nodes"][:]
         # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
         time_machine = sim_util.RopeSimTimeMachine(rope_nodes, sim_env)
 
         if args.animation:
             sim_env.viewer.Step()
 
-        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes, args)
-
-        for i_step in range(args.num_steps):
+        eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes, args, rope_params)
+        
+        for i_step in range(len(loadresultfile[i_task]) - (1 if 'init' in loadresultfile[i_task] else 0)):
             print "task %s step %i" % (i_task, i_step)
             sim_util.reset_arms_to_side(sim_env)
 
@@ -666,30 +666,28 @@ def replay_on_holdout(args, sim_env):
 
             best_action, full_trajs, q_values, trans, rots = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
             
+            time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
+            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
+            start_time = time.time()
             if i_step in args.compute_traj_steps:
                 compute_traj_fn = select_traj_fn(loaded_args)
-                time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
-                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
-                start_time = time.time()
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_xyz, GlobalVars.actions[best_action], animate=args.animation, interactive=args.interactive)
-                eval_stats.exec_elapsed_time += time.time() - start_time
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_xyz, best_action, animate=args.animation, interactive=args.interactive)
             else:
-                time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
-                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
-                start_time = time.time()
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_xyz, GlobalVars.actions[best_action], full_trajs, animate=args.animation, interactive=args.interactive)
-                eval_stats.exec_elapsed_time += time.time() - start_time
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_xyz, best_action, full_trajs, animate=args.animation, interactive=args.interactive)
+            eval_stats.exec_elapsed_time += time.time() - start_time
 
             if eval_stats.feasible:
                  eval_stats.found_feasible_action = True
 
             if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
-                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env)
+                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
             print "BEST ACTION:", best_action
 
             replay_trans, replay_rots = sim_util.get_rope_transforms(sim_env)
             if np.linalg.norm(trans - replay_trans) > 0 or np.linalg.norm(rots - replay_rots) > 0:
                 yellowprint("The rope transforms of the replay rope doesn't match the ones in the original result file by %f and %f" % (np.linalg.norm(trans - replay_trans), np.linalg.norm(rots - replay_rots)))
+            else:
+                yellowprint("Reproducible results OK")
             
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values)
             
@@ -719,11 +717,20 @@ def load_simulation(args, sim_env):
     table_height = init_rope_xyz[:,2].mean() - .02
     table_xml = sim_util.make_table_xml(translation=[1, 0, table_height], extents=[.85, .55, .01])
     sim_env.env.LoadData(table_xml)
+    obstacle_bodies = []
     if 'bookshelve' in args.obstacles:
         sim_env.env.Load("data/bookshelves.env.xml")
+        obstacle_bodies.extend(sim_env.env.GetBodies()[-1:])
     if 'boxes' in args.obstacles:
         sim_env.env.LoadData(sim_util.make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
         sim_env.env.LoadData(sim_util.make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
+        obstacle_bodies.extend(sim_env.env.GetBodies()[-2:])
+    if 'cylinders' in args.obstacles:
+        sim_env.env.LoadData(sim_util.make_cylinder_xml("cylinder0", [.7,.43,table_height+(.01+.5)], .12, 1.))
+        sim_env.env.LoadData(sim_util.make_cylinder_xml("cylinder1", [.7,-.43,table_height+(.01+.5)], .12, 1.))
+        sim_env.env.LoadData(sim_util.make_cylinder_xml("cylinder2", [.4,.2,table_height+(.01+.65)], .06, .5))
+        sim_env.env.LoadData(sim_util.make_cylinder_xml("cylinder3", [.4,-.2,table_height+(.01+.65)], .06, .5))
+        obstacle_bodies.extend(sim_env.env.GetBodies()[-4:])
 
     cc = trajoptpy.GetCollisionChecker(sim_env.env)
     for gripper_link in [link for link in sim_env.robot.GetLinks() if 'gripper' in link.GetName()]:
@@ -754,6 +761,8 @@ def load_simulation(args, sim_env):
                 np.savetxt(args.camera_matrix_file, camera_matrix)
             except:
                 print "GetWindowProp and GetCameraManipulatorMatrix are not defined. Pull and recompile Trajopt."
+        for body in obstacle_bodies:
+            sim_env.viewer.SetTransparency(body, .35)
 
 def main():
     args = parse_input_args()
