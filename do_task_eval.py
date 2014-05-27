@@ -633,8 +633,8 @@ def eval_on_holdout(args, sim_env):
             new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
             if args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
-            new_cloud = clouds.downsample(new_cloud, DS_SIZE)
-            state = ("eval_%i"%get_unique_id(), new_cloud)
+            new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
+            state = ("eval_%i"%get_unique_id(), new_cloud_ds)
     
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
             eval_stats = eval_util.EvalStats()
@@ -646,7 +646,7 @@ def eval_on_holdout(args, sim_env):
                 time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
                 best_root_action = agenda[i_choice][1]
                 start_time = time.time()
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud, best_root_action, args.use_color, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud_ds, best_root_action, args.use_color, animate=args.animation, interactive=args.interactive)
                 eval_stats.exec_elapsed_time += time.time() - start_time
 
                 if eval_stats.feasible:  # try next action if TrajOpt cannot find feasible action
@@ -658,7 +658,10 @@ def eval_on_holdout(args, sim_env):
             if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
                 time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
             print "BEST ACTION:", best_root_action
-            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root)
+                
+            demo_cloud = GlobalVars.actions[best_root_action]['cloud_xyz'][()]
+            demo_cloud_ds = get_ds_cloud(sim_env, best_root_action)
+            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
             
             if not eval_stats.found_feasible_action:
                 # Skip to next knot tie if the action is infeasible -- since
@@ -703,8 +706,8 @@ def replay_on_holdout(args, sim_env):
             new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
             if loaded_args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
-            new_cloud = clouds.downsample(new_cloud, DS_SIZE)
-            state = ("eval_%i"%get_unique_id(), new_cloud)
+            new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
+            state = ("eval_%i"%get_unique_id(), new_cloud_ds)
     
             eval_stats = eval_util.EvalStats()
 
@@ -715,9 +718,9 @@ def replay_on_holdout(args, sim_env):
             start_time = time.time()
             if i_step in args.compute_traj_steps:
                 compute_traj_fn = select_traj_fn(loaded_args)
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud, best_action, loaded_args.use_color, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud_ds, best_action, loaded_args.use_color, animate=args.animation, interactive=args.interactive)
             else:
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_cloud, best_action, loaded_args.use_color, full_trajs, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_cloud_ds, best_action, loaded_args.use_color, full_trajs, animate=args.animation, interactive=args.interactive)
             eval_stats.exec_elapsed_time += time.time() - start_time
 
             if eval_stats.feasible:
@@ -733,7 +736,9 @@ def replay_on_holdout(args, sim_env):
             else:
                 yellowprint("Reproducible results OK")
             
-            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values)
+            demo_cloud = GlobalVars.actions[best_action]['cloud_xyz'][()]
+            demo_cloud_ds = get_ds_cloud(sim_env, best_action)
+            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
             
             if not eval_stats.found_feasible_action:
                 # Skip to next knot tie if the action is infeasible -- since
