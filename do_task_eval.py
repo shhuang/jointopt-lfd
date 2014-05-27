@@ -687,7 +687,7 @@ def replay_on_holdout(args, sim_env):
     num_successes = 0
     num_total = 0
     
-    for i_task, demo_id_rope_nodes in loadresult_items:
+    for i_task, _ in loadresult_items:
         print "task %s" % i_task
         sim_util.reset_arms_to_side(sim_env)
         redprint("Replace rope")
