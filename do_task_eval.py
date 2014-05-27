@@ -631,6 +631,8 @@ def eval_on_holdout(args, sim_env):
             
             redprint("Observe point cloud")
             new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
+            if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
+                break
             if args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
             new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
@@ -704,6 +706,8 @@ def replay_on_holdout(args, sim_env):
 
             redprint("Observe point cloud")
             new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
+            if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
+                break
             if loaded_args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
             new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
