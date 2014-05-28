@@ -67,6 +67,33 @@ def draw_grid(sim_env, old_xyz, f, color = (1,1,0,1)):
     grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
     return plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = color)
 
+def tps_rpm(old_cloud, new_cloud, use_color, bij=False):
+    vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
+    if not bij:
+        f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+    else:
+        x_nd = old_cloud[:,:3]
+        y_md = new_cloud[:,:3]
+        scaled_x_nd, src_params = registration.unit_boxify(x_nd)
+        scaled_y_md, targ_params = registration.unit_boxify(y_md)
+        f,g = registration.tps_rpm_bij(scaled_x_nd, scaled_y_md, rot_reg=np.r_[1e-4, 1e-4, 1e-1], n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2, vis_cost_xy=vis_cost_xy)
+        f = registration.unscale_tps(f, src_params, targ_params)
+        corr = None
+    return f, corr
+
+def tps_rpm_cheap(old_cloud, new_cloud, use_color, bij=False):
+    vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
+    if not bij:
+        f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=14, em_iter=1, vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+    else:
+        x_nd = old_cloud[:,:3]
+        y_md = new_cloud[:,:3]
+        scaled_x_nd, src_params = registration.unit_boxify(x_nd)
+        scaled_y_md, targ_params = registration.unit_boxify(y_md)
+        f,g = registration.tps_rpm_bij(scaled_x_nd, scaled_y_md, rot_reg=1e-3, n_iter=10, vis_cost_xy=vis_cost_xy)
+        corr = None
+    return f, corr
+
 def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, interactive=False, simulate=True):
     seg_info = GlobalVars.actions[action]
     if simulate:
@@ -85,7 +112,7 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
         raise NonImplementedError
     else:
         interest_pts = None
-    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+    f, corr = tps_rpm(old_cloud, new_cloud, use_color)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -212,7 +239,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
         raise NonImplementedError
     else:
         interest_pts = None
-    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+    f, corr = tps_rpm(old_cloud, new_cloud, use_color)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -367,7 +394,7 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
         raise NonImplementedError
     else:
         interest_pts = None
-    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
+    f, corr = tps_rpm(old_cloud, new_cloud, use_color)
 
     handles = []
     if animate:
@@ -661,6 +688,9 @@ def eval_on_holdout(args, sim_env):
                 time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
             print "BEST ACTION:", best_root_action
                 
+            if not args.use_color: # for saving
+                new_cloud = color_cloud(new_cloud, endpoint_inds)
+                new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
             demo_cloud = GlobalVars.actions[best_root_action]['cloud_xyz'][()]
             demo_cloud_ds = get_ds_cloud(sim_env, best_root_action)
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
@@ -740,6 +770,9 @@ def replay_on_holdout(args, sim_env):
             else:
                 yellowprint("Reproducible results OK")
             
+            if not args.use_color: # for saving
+                new_cloud = color_cloud(new_cloud, endpoint_inds)
+                new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
             demo_cloud = GlobalVars.actions[best_action]['cloud_xyz'][()]
             demo_cloud_ds = get_ds_cloud(sim_env, best_action)
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
