@@ -17,7 +17,7 @@ import pdb, time
  
 import cloudprocpy, trajoptpy, openravepy
 import rope_qlearn
-from knot_classifier import isKnot as is_knot
+from knot_classifier import isKnot as is_knot, calculateCrossings
 import os, os.path, numpy as np, h5py
 from numpy import asarray
 import atexit
@@ -42,6 +42,7 @@ class GlobalVars:
     tps_errors_top10 = []
     trajopt_errors_top10 = []
     actions_ds_clouds = {}
+    rope_nodes_crossing_info = {}
     downsample = True
 
 def get_ds_cloud(sim_env, action):
@@ -88,9 +89,19 @@ def tps_rpm(old_cloud, new_cloud, use_color, reg_type='segment'):
         corr = None
     return f, corr
 
-def tps_rpm_cheap(old_cloud, new_cloud, use_color, reg_type='segment'):
+def tps_rpm_cheap(action_cloud, state, use_color, reg_type='segment'):
+    old_cloud = action_cloud[1]
+    new_cloud = state[1]
     if reg_type == 'segment':
-        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud)
+        action, action_rope_nodes = action_cloud
+        if action not in GlobalVars.rope_nodes_crossing_info:
+            crossings, crossings_links_inds, cross_pairs, _ = calculateCrossings(action_rope_nodes)
+            GlobalVars.rope_nodes_crossing_info[action] = (action_rope_nodes, crossings, crossings_links_inds, cross_pairs)
+        state_id, state_rope_nodes = state
+        if state_id not in GlobalVars.rope_nodes_crossing_info:
+            crossings, crossings_links_inds, cross_pairs, _ = calculateCrossings(state_rope_nodes)
+            GlobalVars.rope_nodes_crossing_info[state_id] = (state_rope_nodes, crossings, crossings_links_inds, cross_pairs)
+        f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id])
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=14, em_iter=1, vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
@@ -466,9 +477,8 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
     return success, feasible, misgrasp, full_trajs
 
 def regcost_feature_fn(sim_env, state, action, use_color):
-    new_cloud = state[1]
-    old_cloud = get_ds_cloud(sim_env, action)
-    f, corr = tps_rpm_cheap(old_cloud, new_cloud, use_color)
+    action_cloud = (action, get_ds_cloud(sim_env, action))
+    f, corr = tps_rpm_cheap(action_cloud, state, use_color)
     if f is None:
         cost = np.inf
     else:
