@@ -42,11 +42,15 @@ class GlobalVars:
     tps_errors_top10 = []
     trajopt_errors_top10 = []
     actions_ds_clouds = {}
+    downsample = True
 
 def get_ds_cloud(sim_env, action):
-    if action not in GlobalVars.actions_ds_clouds:
-        GlobalVars.actions_ds_clouds[action] = clouds.downsample(GlobalVars.actions[action]['cloud_xyz'], DS_SIZE)
-    return GlobalVars.actions_ds_clouds[action]
+    if GlobalVars.downsample:
+        if action not in GlobalVars.actions_ds_clouds:
+            GlobalVars.actions_ds_clouds[action] = clouds.downsample(GlobalVars.actions[action]['cloud_xyz'], DS_SIZE)
+        return GlobalVars.actions_ds_clouds[action]
+    else:
+        return GlobalVars.actions[action]['cloud_xyz'][()]
 
 def color_cloud(xyz, endpoint_inds, endpoint_color = np.array([0,0,1]), non_endpoint_color = np.array([1,0,0])):
     xyzrgb = np.zeros((len(xyz),6))
@@ -67,11 +71,14 @@ def draw_grid(sim_env, old_xyz, f, color = (1,1,0,1)):
     grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
     return plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = color)
 
-def tps_rpm(old_cloud, new_cloud, use_color, bij=False):
-    vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
-    if not bij:
+def tps_rpm(old_cloud, new_cloud, use_color, reg_type='segment'):
+    if reg_type == 'segment':
+        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud)
+    elif reg_type == 'rpm':
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
-    else:
+    elif reg_type == 'bij':
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         x_nd = old_cloud[:,:3]
         y_md = new_cloud[:,:3]
         scaled_x_nd, src_params = registration.unit_boxify(x_nd)
@@ -81,11 +88,14 @@ def tps_rpm(old_cloud, new_cloud, use_color, bij=False):
         corr = None
     return f, corr
 
-def tps_rpm_cheap(old_cloud, new_cloud, use_color, bij=False):
-    vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
-    if not bij:
+def tps_rpm_cheap(old_cloud, new_cloud, use_color, reg_type='segment'):
+    if reg_type == 'segment':
+        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud)
+    elif reg_type == 'rpm':
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=14, em_iter=1, vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
-    else:
+    elif reg_type == 'bij':
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         x_nd = old_cloud[:,:3]
         y_md = new_cloud[:,:3]
         scaled_x_nd, src_params = registration.unit_boxify(x_nd)
@@ -458,8 +468,11 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
 def regcost_feature_fn(sim_env, state, action, use_color):
     new_cloud = state[1]
     old_cloud = get_ds_cloud(sim_env, action)
-    f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=8, em_iter=1, vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
-    cost = registration.tps_reg_cost(f)
+    f, corr = tps_rpm_cheap(old_cloud, new_cloud, use_color)
+    if f is None:
+        cost = np.inf
+    else:
+        cost = registration.tps_reg_cost(f)
     return np.array([float(cost)]) # no need to normalize since bending cost is independent of number of points
    
 def regcost_trajopt_feature_fn(sim_env, state, action):
@@ -539,6 +552,11 @@ def set_global_vars(args, sim_env):
     if args.subparser_name == "eval":
         GlobalVars.gripper_weighting = args.gripper_weighting
     
+    GlobalVars.downsample = args.downsample
+    if GlobalVars.downsample:
+        global clouds
+        from rapprentice import clouds
+    
 def select_feature_fn(warping_cost, args):
     if warping_cost == "regcost":
         feature_fn = lambda sim_env, state, action: regcost_feature_fn(sim_env, state, action, args.use_color)
@@ -568,6 +586,8 @@ def parse_input_args():
     parser.add_argument("--interactive", action="store_true", help="step animation and optimization if specified")
     parser.add_argument("--obstacles", type=str, nargs='*', choices=['bookshelve', 'boxes', 'cylinders'], default=[])
     parser.add_argument("--resultfile", type=str, help="no results are saved if this is not specified")
+    parser.add_argument("--raycast", type=int, default=0, help="use raycast or rope nodes observation model")
+    parser.add_argument("--downsample", type=int, default=1)
 
     # selects tasks to evaluate/replay
     parser.add_argument("--tasks", type=int, nargs='*', metavar="i_task")
@@ -594,7 +614,7 @@ def parse_input_args():
     parser_eval.add_argument("--beta", type=int, default=10)
     parser_eval.add_argument("--gripper_weighting", action="store_true")
     parser_eval.add_argument("--num_steps", type=int, default=5, help="maximum number of steps to simulate each task")
-    parser_eval.add_argument("--use_color", type=int, default=1)
+    parser_eval.add_argument("--use_color", type=int, default=0)
     
     parser_replay = subparsers.add_parser('replay')
     parser_replay.add_argument("loadresultfile", type=str)
@@ -657,12 +677,16 @@ def eval_on_holdout(args, sim_env):
             sim_util.reset_arms_to_side(sim_env)
             
             redprint("Observe point cloud")
-            new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
-            if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
-                break
+            if args.raycast:
+                new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
+                if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
+                    break
+            else:
+                new_cloud = sim_env.sim.observe_cloud()
+                endpoint_inds = np.zeros(len(new_cloud), dtype=bool) # for now, args.raycast=False is not compatible with args.use_color=True
             if args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
-            new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
+            new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
             state = ("eval_%i"%get_unique_id(), new_cloud_ds)
     
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
@@ -690,7 +714,7 @@ def eval_on_holdout(args, sim_env):
                 
             if not args.use_color: # for saving
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
-                new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
+                new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
             demo_cloud = GlobalVars.actions[best_root_action]['cloud_xyz'][()]
             demo_cloud_ds = get_ds_cloud(sim_env, best_root_action)
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
@@ -735,12 +759,16 @@ def replay_on_holdout(args, sim_env):
             sim_util.reset_arms_to_side(sim_env)
 
             redprint("Observe point cloud")
-            new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
-            if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
-                break
+            if args.raycast:
+                new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
+                if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
+                    break
+            else:
+                new_cloud = sim_env.sim.observe_cloud()
+                endpoint_inds = np.zeros(len(new_cloud), dtype=bool) # for now, args.raycast=False is not compatible with args.use_color=True
             if loaded_args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
-            new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
+            new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
             state = ("eval_%i"%get_unique_id(), new_cloud_ds)
     
             eval_stats = eval_util.EvalStats()
@@ -772,7 +800,7 @@ def replay_on_holdout(args, sim_env):
             
             if not args.use_color: # for saving
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
-                new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE)
+                new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
             demo_cloud = GlobalVars.actions[best_action]['cloud_xyz'][()]
             demo_cloud_ds = get_ds_cloud(sim_env, best_action)
             eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
