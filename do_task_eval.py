@@ -242,7 +242,7 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
             else:  # Only execute feasible trajectories
                 full_traj = sim_util.remove_tight_rope_pull(sim_env, full_traj)
                 if len(full_traj[0]) > 0:
-                    success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive)
+                    success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive, max_cart_vel_trans_traj=.05 if i_miniseg==0 else .02)
 
         if not success: break
 
@@ -405,7 +405,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
             else:  # Only execute feasible trajectories
                 tps_full_traj = sim_util.remove_tight_rope_pull(sim_env, tps_full_traj)
                 if len(full_traj[0]) > 0:
-                    success &= sim_util.sim_full_traj_maybesim(sim_env, tps_full_traj, animate=animate, interactive=interactive)
+                    success &= sim_util.sim_full_traj_maybesim(sim_env, tps_full_traj, animate=animate, interactive=interactive, max_cart_vel_trans_traj=.05 if i_miniseg==0 else .02)
 
         if not success: break
 
@@ -484,7 +484,7 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
             else:  # Only execute feasible trajectories
                 full_traj = sim_util.remove_tight_rope_pull(sim_env, full_traj)
                 if len(full_traj[0]) > 0:
-                    success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive)
+                    success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive, max_cart_vel_trans_traj=.05 if i_miniseg==0 else .02)
 
         if not success: break
 
