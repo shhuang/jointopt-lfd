@@ -95,12 +95,12 @@ def tps_rpm_cheap(action_cloud, state, use_color, reg_type='segment'):
     if reg_type == 'segment':
         action, action_rope_nodes = action_cloud
         if action not in GlobalVars.rope_nodes_crossing_info:
-            crossings, crossings_links_inds, cross_pairs, _ = calculateCrossings(action_rope_nodes)
-            GlobalVars.rope_nodes_crossing_info[action] = (action_rope_nodes, crossings, crossings_links_inds, cross_pairs)
+            crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(action_rope_nodes)
+            GlobalVars.rope_nodes_crossing_info[action] = (action_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
         state_id, state_rope_nodes = state
         if state_id not in GlobalVars.rope_nodes_crossing_info:
-            crossings, crossings_links_inds, cross_pairs, _ = calculateCrossings(state_rope_nodes)
-            GlobalVars.rope_nodes_crossing_info[state_id] = (state_rope_nodes, crossings, crossings_links_inds, cross_pairs)
+            crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(state_rope_nodes)
+            GlobalVars.rope_nodes_crossing_info[state_id] = (state_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
         f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id])
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
