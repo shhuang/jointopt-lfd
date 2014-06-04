@@ -38,6 +38,7 @@ class GlobalVars:
     beta = 10.0
     resample_rope = None
     actions = None
+    actions_cache = None
     gripper_weighting = False
     tps_errors_top10 = []
     trajopt_errors_top10 = []
@@ -95,7 +96,21 @@ def tps_rpm_cheap(action_cloud, state, use_color, reg_type='segment'):
     if reg_type == 'segment':
         action, action_rope_nodes = action_cloud
         if action not in GlobalVars.rope_nodes_crossing_info:
-            crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(action_rope_nodes)
+            if action not in GlobalVars.actions_cache:
+                crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(action_rope_nodes)
+                action_group = GlobalVars.actions_cache.create_group(action)
+                action_group['rope_nodes'] = action_rope_nodes
+                if crossings: action_group['crossings'] = crossings
+                if crossings_links_inds: action_group['crossings_links_inds'] = crossings_links_inds
+                if cross_pairs: action_group['cross_pairs'] = list(cross_pairs)
+                action_group['rope_closed'] = rope_closed
+            else:
+                action_group = GlobalVars.actions_cache[action]
+                assert np.linalg.norm(action_rope_nodes - action_group['rope_nodes'][()]) == 0.0
+                crossings =  action_group['crossings'][()] if 'crossings' in action_group else []
+                crossings_links_inds = action_group['crossings_links_inds'][()] if 'crossings_links_inds' in action_group else []
+                cross_pairs = set([tuple(p) for p in action_group['cross_pairs']]) if 'cross_pairs' in action_group else set([])
+                rope_closed = action_group['rope_closed'][()]
             GlobalVars.rope_nodes_crossing_info[action] = (action_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
         state_id, state_rope_nodes = state
         if state_id not in GlobalVars.rope_nodes_crossing_info:
@@ -565,6 +580,8 @@ def set_global_vars(args, sim_env):
         GlobalVars.beta = args.beta
 
     GlobalVars.actions = h5py.File(args.actionfile, 'r')
+    actions_root, actions_ext = os.path.splitext(args.actionfile)
+    GlobalVars.actions_cache = h5py.File(actions_root + '.cache' + actions_ext, 'a')
     if args.subparser_name == "eval":
         GlobalVars.gripper_weighting = args.gripper_weighting
     
