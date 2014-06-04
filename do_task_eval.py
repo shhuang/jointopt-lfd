@@ -808,7 +808,7 @@ def replay_on_holdout(args, sim_env):
             else:
                 yellowprint("Reproducible results OK")
             
-            if not args.use_color: # for saving
+            if not loaded_args.use_color: # for saving
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
                 new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
             demo_cloud = GlobalVars.actions[best_action]['cloud_xyz'][()]
