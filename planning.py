@@ -87,7 +87,7 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta_pos =
             robot.SetDOFValues(traj[i_step], arm_inds)
             new_hmat = ee_link.GetTransform()
             pose_err = openravepy.poseFromMatrix(mu.invertHmat(hmat).dot(new_hmat))
-            pose_costs2 += np.abs((pose_err[1:4] * beta_rot + pose_err[4:7] * beta_pos)/n_steps).sum()
+            pose_costs2 += ((beta_rot/n_steps) * np.linalg.norm(pose_err[1:4]))**2 + ((beta_pos/n_steps) * np.linalg.norm(pose_err[4:7]))**2
     print "pose_costs", pose_costs, pose_costs2
 
     print "planned trajectory for %s. total pose error: %.3f."%(manip_name, pose_costs)
@@ -276,7 +276,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                 cur_hmat = ee_link.GetTransform()
                 warped_src_hmat = f.transform_hmats(old_hmat[None,:,:])[0]
                 pose_err = openravepy.poseFromMatrix(mu.invertHmat(warped_src_hmat).dot(cur_hmat))
-                pose_costs2 += np.abs((pose_err[1:4] * beta_rot + pose_err[4:7] * beta_pos)/n_steps).sum()
+                pose_costs2 += ((beta_rot/n_steps) * np.linalg.norm(pose_err[1:4]))**2 + ((beta_pos/n_steps) * np.linalg.norm(pose_err[4:7]))**2
     print "pose_costs", pose_costs, pose_costs2
 
     print "planned trajectory for %s. tps error: %.3f. total pose error: %.3f."%(manip_name, tps_cost, pose_costs)
