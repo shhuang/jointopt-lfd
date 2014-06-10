@@ -5,7 +5,7 @@ from rapprentice import tps, math_utils as mu
 from rapprentice.registration import ThinPlateSpline
 import IPython as ipy
 
-def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.):
+def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta_pos = 1000.0, beta_rot = 10., no_collision_cost_first=False, use_collision_cost=True):
     orig_dof_inds = robot.GetActiveDOFIndices()
     orig_dof_vals = robot.GetDOFValues()
         
@@ -17,7 +17,10 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
 
     ee_linkname = ee_link.GetName()
     
-    init_traj = old_traj.copy()
+    if no_collision_cost_first:
+        init_traj, _ = plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta_pos = beta_pos, beta_rot = beta_rot, no_collision_cost_first=False, use_collision_cost=False)
+    else:
+        init_traj = old_traj.copy()
 
     request = {
         "basic_info" : {
@@ -28,16 +31,8 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
         "costs" : [
         {
             "type" : "joint_vel",
-            "params": {"coeffs" : [n_steps/5.]}
-        },
-        {
-            "type" : "collision",
-            "params" : {
-              "continuous" : True,
-              "coeffs" : [1000],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
-              "dist_pen" : [0.01]  # robot-obstacle distance that penalty kicks in. expands to length n_timesteps
-            }
-        }                
+            "params": {"coeffs" : [1./float(n_steps)]}
+        },            
         ],
         "constraints" : [
         ],
@@ -46,6 +41,17 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
             "data":[x.tolist() for x in init_traj]
         }
     }
+    
+    if use_collision_cost:
+        request["costs"].append(
+            {
+                "type" : "collision",
+                "params" : {
+                  "continuous" : True,
+                  "coeffs" : [1000],  # penalty coefficients. list of length one is automatically expanded to a list of length n_timesteps
+                  "dist_pen" : [0.01]  # robot-obstacle distance that penalty kicks in. expands to length n_timesteps
+                }
+            })
 
     poses = [openravepy.poseFromMatrix(hmat) for hmat in new_hmats]
     for (i_step,pose) in enumerate(poses):
@@ -56,8 +62,8 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
                 "wxyz":pose[0:4].tolist(),
                 "link":ee_linkname,
                 "timestep":i_step,
-                "pos_coeffs":[beta/n_steps]*3,
-                "rot_coeffs":[beta/n_steps]*3
+                "pos_coeffs":[beta_pos/n_steps]*3,
+                "rot_coeffs":[beta_rot/n_steps]*3
              }
             })
 
@@ -81,7 +87,7 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta = 10.
             robot.SetDOFValues(traj[i_step], arm_inds)
             new_hmat = ee_link.GetTransform()
             pose_err = openravepy.poseFromMatrix(mu.invertHmat(hmat).dot(new_hmat))
-            pose_costs2 += np.abs(pose_err[1:7] * beta/n_steps).sum()
+            pose_costs2 += np.abs((pose_err[1:4] * beta_rot + pose_err[4:7] * beta_pos)/n_steps).sum()
     print "pose_costs", pose_costs, pose_costs2
 
     print "planned trajectory for %s. total pose error: %.3f."%(manip_name, pose_costs)
@@ -124,7 +130,7 @@ def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
     return H, f, A, N, z, wt_n, rot_coefs
 
 
-def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta = 1., bend_coef=.1, rot_coef = 1e-5, wt_n=None):
+def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta_pos = 1000.0, beta_rot = 10, bend_coef=.1, rot_coef = 1e-5, wt_n=None):
     """
     The order of dof indices in hmats and traj should be the same as especified by manip_name
 
@@ -207,8 +213,8 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                     "wxyz":pose[0:4].tolist(),
                     "link":ee_linkname,
                     "timestep":i_step,
-                    "pos_coeffs":[beta/n_steps]*3,
-                    "rot_coeffs":[0.1 * beta/n_steps]*3
+                    "pos_coeffs":[beta_pos/n_steps]*3,
+                    "rot_coeffs":[beta_rot/n_steps]*3
                  }
                 })
 #         for (i_step,hmat) in zip([0], fn.transform_hmats(np.array([old_hmats[0]]))):
@@ -270,7 +276,7 @@ def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, o
                 cur_hmat = ee_link.GetTransform()
                 warped_src_hmat = f.transform_hmats(old_hmat[None,:,:])[0]
                 pose_err = openravepy.poseFromMatrix(mu.invertHmat(warped_src_hmat).dot(cur_hmat))
-                pose_costs2 += np.abs(pose_err[1:7] * np.array([.1, .1, .1, 1, 1, 1]) * beta/n_steps).sum()
+                pose_costs2 += np.abs((pose_err[1:4] * beta_rot + pose_err[4:7] * beta_pos)/n_steps).sum()
     print "pose_costs", pose_costs, pose_costs2
 
     print "planned trajectory for %s. tps error: %.3f. total pose error: %.3f."%(manip_name, tps_cost, pose_costs)

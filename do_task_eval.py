@@ -17,6 +17,7 @@ import pdb, time
  
 import cloudprocpy, trajoptpy, openravepy
 import rope_qlearn
+from rope_qlearn import get_closing_pts, get_closing_inds
 from knot_classifier import isKnot as is_knot, calculateCrossings
 import os, os.path, numpy as np, h5py
 from numpy import asarray
@@ -35,7 +36,8 @@ DS_SIZE = .025
 class GlobalVars:
     unique_id = 0
     alpha = 20.0  # alpha and beta can be set by user parameters - but should be changed nowhere else
-    beta = 10.0
+    beta_pos = 1000.0
+    beta_rot = 10.0
     resample_rope = None
     actions = None
     actions_cache = None
@@ -73,9 +75,41 @@ def draw_grid(sim_env, old_xyz, f, color = (1,1,0,1)):
     grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
     return plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = color)
 
-def tps_rpm(old_cloud, new_cloud, use_color, reg_type='segment'):
+def tps_rpm(old_cloud, new_cloud, use_color, interest_pts = None, closing_hmats = None, reg_type='segment'):
     if reg_type == 'segment':
-        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud)
+        def plot_cb(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1):
+            from rapprentice.plotting_plt import plot_tps_registration_segment_proj_2d
+            import matplotlib.pyplot as plt
+            plot_tps_registration_segment_proj_2d(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1)
+            if interest_pts is not None and len(interest_pts) > 0:
+                plt.subplot(221, aspect='equal')
+                pts = np.array(interest_pts)
+                plt.scatter(pts[:,0], pts[:,1], marker='x')
+                plt.subplot(222, aspect='equal')
+                pts = f.transform_points(pts)
+                plt.scatter(pts[:,0], pts[:,1], marker='x')
+            if closing_hmats is not None:
+                plt.subplot(221, aspect='equal')
+                for hmat in closing_hmats.values():
+                    plt.arrow(hmat[0,3], hmat[1,3], hmat[0,0]/10.0, hmat[1,0]/10.0, fc='r', ec='r')
+                    plt.arrow(hmat[0,3], hmat[1,3], hmat[0,1]/10.0, hmat[1,1]/10.0, fc='g', ec='g')
+                    plt.arrow(hmat[0,3], hmat[1,3], hmat[0,2]/10.0, hmat[1,2]/10.0, fc='b', ec='b')
+                for i_plot in range(2,5):
+                    plt.subplot(2,2,i_plot, aspect='equal')
+                    for hmat in f.transform_hmats(np.array(closing_hmats.values())):
+                        plt.arrow(hmat[0,3], hmat[1,3], hmat[0,0]/10.0, hmat[1,0]/10.0, fc='r', ec='r')
+                        plt.arrow(hmat[0,3], hmat[1,3], hmat[0,1]/10.0, hmat[1,1]/10.0, fc='g', ec='g')
+                        plt.arrow(hmat[0,3], hmat[1,3], hmat[0,2]/10.0, hmat[1,2]/10.0, fc='b', ec='b')
+            plt.draw()
+        if interest_pts is not None:
+            interest_pts_inds = np.zeros(len(old_cloud), dtype=bool)
+            for interest_pt in interest_pts:
+                interest_pts_inds += np.apply_along_axis(np.linalg.norm, 1, old_cloud - interest_pt) < 0.025
+            x_weights = np.ones(len(old_cloud))
+            x_weights[interest_pts_inds] = 5.0
+        else:
+            x_weights = None
+        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud, reg=0.01, x_weights=x_weights, plotting=False, plot_cb=plot_cb)
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
@@ -116,7 +150,12 @@ def tps_rpm_cheap(action_cloud, state, use_color, reg_type='segment'):
         if state_id not in GlobalVars.rope_nodes_crossing_info:
             crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(state_rope_nodes)
             GlobalVars.rope_nodes_crossing_info[state_id] = (state_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
-        f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id])
+        def plot_cb(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1):
+            from rapprentice.plotting_plt import plot_tps_registration_segment_proj_2d
+            import matplotlib.pyplot as plt
+            plot_tps_registration_segment_proj_2d(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1)
+            plt.show()
+        f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id], reg=0.01, plotting=False, plot_cb=plot_cb)
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=14, em_iter=1, vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
@@ -145,10 +184,14 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
     hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
     if GlobalVars.gripper_weighting:
         interest_pts = get_closing_pts(seg_info)
-        raise NonImplementedError
     else:
         interest_pts = None
-    f, corr = tps_rpm(old_cloud, new_cloud, use_color)
+    closing_inds = get_closing_inds(seg_info)
+    closing_hmats = {}
+    for lr in closing_inds:
+        if closing_inds[lr] != -1:
+            closing_hmats[lr] = seg_info["%s_gripper_tool_frame"%lr]['hmat'][closing_inds[lr]]
+    f, corr = tps_rpm(old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -206,14 +249,15 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             print "planning trajectory following"
-            new_joint_traj, pose_errs = planning.plan_follow_traj(sim_env.robot, manip_name,
-                                                       sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta=GlobalVars.beta)
+            new_joint_traj, pose_errs = planning.plan_follow_traj(sim_env.robot, manip_name, sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs, old_joint_traj_rs, 
+                                                                  beta_pos=GlobalVars.beta_pos, beta_rot=GlobalVars.beta_rot, no_collision_cost_first=True)
+
             if animate:
                 handles.append(sim_env.env.drawlinestrip(sim_util.get_ee_traj(sim_env, lr, new_joint_traj)[:,:3,3], 2, (0,0,1,1)))
                 sim_env.viewer.Step()
             
             n_steps = len(new_ee_traj_rs)
-            total_pose_cost += pose_errs * float(n_steps) / float(GlobalVars.beta)   # Normalize pos error
+            total_pose_cost += pose_errs * float(n_steps)   # Unnormalize pose error to normalize the total
             total_poses += n_steps
 
             lr2newtraj[lr] = new_joint_traj
@@ -240,7 +284,6 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
                 feasible = False
                 success = False
             else:  # Only execute feasible trajectories
-                full_traj = sim_util.remove_tight_rope_pull(sim_env, full_traj)
                 if len(full_traj[0]) > 0:
                     success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive, max_cart_vel_trans_traj=.05 if i_miniseg==0 else .02)
 
@@ -274,10 +317,9 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
     hmat_dict = dict(hmat_list)
     if GlobalVars.gripper_weighting:
         interest_pts = get_closing_pts(seg_info)
-        raise NonImplementedError
     else:
         interest_pts = None
-    f, corr = tps_rpm(old_cloud, new_cloud, use_color)
+    f, corr = tps_rpm(old_cloud, new_cloud, use_color, interest_pts)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -336,8 +378,8 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
             ee_link_name = "%s_gripper_tool_frame"%lr
             new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
-            new_joint_traj = planning.plan_follow_traj(sim_env.robot, manip_name,
-                                                       sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs,old_joint_traj_rs, beta = GlobalVars.beta)[0]
+            new_joint_traj = planning.plan_follow_traj(sim_env.robot, manip_name, sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs, old_joint_traj_rs, 
+                                                       beta_pos=GlobalVars.beta_pos, beta_rot=GlobalVars.beta_rot, no_collision_cost_first=True)[0]
             lr2newtraj[lr] = new_joint_traj
             ################################    
         redprint("Finished JOINT ANGLE trajectory for part %i using arms '%s'"%(i_miniseg, lr2newtraj.keys()))
@@ -363,11 +405,11 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
             xtarg_nd = (corr/wt_n[:,None]).dot(new_cloud[:,:3])
             tps_traj, f_new, tps_cost, pose_costs = planning.joint_fit_tps_follow_traj(sim_env.robot, '+'.join(manip_names),
                                                    ee_links, f, hmat_seglist, old_trajs, old_cloud[:,:3], xtarg_nd,
-                                                   alpha=GlobalVars.alpha, beta=GlobalVars.beta, bend_coef=f._bend_coef, rot_coef=f._rot_coef, wt_n=wt_n)
+                                                   alpha=GlobalVars.alpha, beta_pos=GlobalVars.beta_pos, beta_rot=GlobalVars.beta_rot, bend_coef=f._bend_coef, rot_coef=f._rot_coef, wt_n=wt_n)
             tps_full_traj = (tps_traj, dof_inds)
             n_steps = len(hmat_seglist) 
             total_tps_cost += tps_cost / float(GlobalVars.alpha)  # Normalize tps cost
-            total_pose_cost += pose_costs * float(n_steps) / float(GlobalVars.beta)  # Normalize pose costs
+            total_pose_cost += pose_costs * float(n_steps) # Normalize pose costs
             total_poses += len(lr2newtraj) * n_steps
 
             if animate:
@@ -403,7 +445,6 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
                 feasible = False
                 success = False
             else:  # Only execute feasible trajectories
-                tps_full_traj = sim_util.remove_tight_rope_pull(sim_env, tps_full_traj)
                 if len(full_traj[0]) > 0:
                     success &= sim_util.sim_full_traj_maybesim(sim_env, tps_full_traj, animate=animate, interactive=interactive, max_cart_vel_trans_traj=.05 if i_miniseg==0 else .02)
 
@@ -431,10 +472,14 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
 
     if GlobalVars.gripper_weighting:
         interest_pts = get_closing_pts(seg_info)
-        raise NonImplementedError
     else:
         interest_pts = None
-    f, corr = tps_rpm(old_cloud, new_cloud, use_color)
+    closing_inds = get_closing_inds(seg_info)
+    closing_hmats = {}
+    for lr in closing_inds:
+        if closing_inds[lr] != -1:
+            closing_hmats[lr] = seg_info["%s_gripper_tool_frame"%lr]['hmat'][closing_inds[lr]]
+    f, corr = tps_rpm(old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
 
     handles = []
     if animate:
@@ -482,7 +527,6 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
                 feasible = False
                 success = False
             else:  # Only execute feasible trajectories
-                full_traj = sim_util.remove_tight_rope_pull(sim_env, full_traj)
                 if len(full_traj[0]) > 0:
                     success &= sim_util.sim_full_traj_maybesim(sim_env, full_traj, animate=animate, interactive=interactive, max_cart_vel_trans_traj=.05 if i_miniseg==0 else .02)
 
@@ -577,7 +621,8 @@ def set_global_vars(args, sim_env):
     # Note: alpha and beta should not be changed anywhere else!
     if args.subparser_name == "eval":
         GlobalVars.alpha = args.alpha
-        GlobalVars.beta = args.beta
+        GlobalVars.beta_pos = args.beta_pos
+        GlobalVars.beta_rot = args.beta_rot
 
     GlobalVars.actions = h5py.File(args.actionfile, 'r')
     actions_root, actions_ext = os.path.splitext(args.actionfile)
@@ -644,7 +689,8 @@ def parse_input_args():
     parser_eval.add_argument("--jointopt", action="store_true")
     parser_eval.add_argument("--search_until_feasible", action="store_true")
     parser_eval.add_argument("--alpha", type=int, default=20)
-    parser_eval.add_argument("--beta", type=int, default=10)
+    parser_eval.add_argument("--beta_pos", type=int, default=1000)
+    parser_eval.add_argument("--beta_rot", type=int, default=10)
     parser_eval.add_argument("--gripper_weighting", action="store_true")
     parser_eval.add_argument("--num_steps", type=int, default=5, help="maximum number of steps to simulate each task")
     parser_eval.add_argument("--use_color", type=int, default=0)
@@ -726,6 +772,8 @@ def eval_on_holdout(args, sim_env):
             eval_stats = eval_util.EvalStats()
 
             agenda, q_values_root = select_best_action(sim_env, state, num_actions_to_try, feature_fn, prune_feature_fn, eval_stats, args.warpingcost)
+            if agenda[0][0] == -np.inf: # no good action was able to be chosen # TODO check this for agenda[i_choice]
+                break
 
             time_machine.set_checkpoint('prechoice_%i'%i_step, sim_env)
             for i_choice in range(num_actions_to_try):
@@ -855,7 +903,8 @@ def replay_on_holdout(args, sim_env):
 def load_simulation(args, sim_env):
     sim_env.env = openravepy.Environment()
     sim_env.env.StopSimulation()
-    sim_env.env.Load("robots/pr2-beta-static.zae")
+#     sim_env.env.Load("robots/pr2-beta-static.zae")
+    sim_env.env.Load("./data/misc/pr2-beta-static-decomposed-shoulder.zae")
     sim_env.robot = sim_env.env.GetRobots()[0]
 
     actions = h5py.File(args.actionfile, 'r')
