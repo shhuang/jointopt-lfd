@@ -206,6 +206,10 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
             handles.append(sim_env.env.drawlinestrip(old_hmats[:,:3,3], 2, (1,0,0,1)))
         for transformed_hmats in lr2eetraj.values():
             handles.append(sim_env.env.drawlinestrip(transformed_hmats[:,:3,3], 2, (0,1,0,1)))
+        for hmat in f.transform_hmats(np.array(closing_hmats.values())):
+            handles.append(sim_env.env.drawarrow(hmat[:3,3], hmat[:3,3]+hmat[:3,0]/10.0, 0.005, (1,0,0,1)))
+            handles.append(sim_env.env.drawarrow(hmat[:3,3], hmat[:3,3]+hmat[:3,1]/10.0, 0.005, (0,1,0,1)))
+            handles.append(sim_env.env.drawarrow(hmat[:3,3], hmat[:3,3]+hmat[:3,2]/10.0, 0.005, (0,0,1,1)))
         sim_env.viewer.Step()
 
     miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
@@ -226,7 +230,7 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
         lr2oldtraj = {}
         for lr in 'lr':
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]                 
-            old_joint_traj = asarray(seg_info[manip_name][i_start:i_end+1])
+            old_joint_traj = asarray(seg_info[manip_name][i_start - int(i_start > 0):i_end+1])
             #print (old_joint_traj[1:] - old_joint_traj[:-1]).ptp(axis=0), i_start, i_end
             if sim_util.arm_moved(old_joint_traj):       
                 lr2oldtraj[lr] = old_joint_traj   
@@ -246,7 +250,7 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
             old_joint_traj_rs = mu.interp2d(timesteps_rs, np.arange(len(old_joint_traj)), old_joint_traj)
             
             ee_link_name = "%s_gripper_tool_frame"%lr
-            new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
+            new_ee_traj = lr2eetraj[lr][i_start - int(i_start > 0):i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             print "planning trajectory following"
             new_joint_traj, pose_errs = planning.plan_follow_traj(sim_env.robot, manip_name, sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs, old_joint_traj_rs, 
@@ -356,7 +360,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
         lr2oldtraj = {}
         for lr in 'lr':
             manip_name = {"l":"leftarm", "r":"rightarm"}[lr]                 
-            old_joint_traj = asarray(seg_info[manip_name][i_start:i_end+1])
+            old_joint_traj = asarray(seg_info[manip_name][i_start - int(i_start > 0):i_end+1])
             #print (old_joint_traj[1:] - old_joint_traj[:-1]).ptp(axis=0), i_start, i_end
             if sim_util.arm_moved(old_joint_traj):       
                 lr2oldtraj[lr] = old_joint_traj   
@@ -376,7 +380,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
             old_joint_traj_rs = mu.interp2d(timesteps_rs, np.arange(len(old_joint_traj)), old_joint_traj)
             
             ee_link_name = "%s_gripper_tool_frame"%lr
-            new_ee_traj = lr2eetraj[lr][i_start:i_end+1]          
+            new_ee_traj = lr2eetraj[lr][i_start - int(i_start > 0):i_end+1]          
             new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
             new_joint_traj = planning.plan_follow_traj(sim_env.robot, manip_name, sim_env.robot.GetLink(ee_link_name), new_ee_traj_rs, old_joint_traj_rs, 
                                                        beta_pos=GlobalVars.beta_pos, beta_rot=GlobalVars.beta_rot, no_collision_cost_first=True)[0]
@@ -396,7 +400,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
                 manip_names.append(manip_name)
                 ee_link_name = "%s_gripper_tool_frame"%lr
                 ee_links.append(sim_env.robot.GetLink(ee_link_name))
-                new_ee_traj = hmat_dict[lr][i_start:i_end+1]
+                new_ee_traj = hmat_dict[lr][i_start - int(i_start > 0):i_end+1]
                 new_ee_traj_rs = resampling.interp_hmats(timesteps_rs, np.arange(len(new_ee_traj)), new_ee_traj)
                 hmat_seglist.append(new_ee_traj_rs)
                 old_trajs.append(traj)
@@ -417,7 +421,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
                 handles_f.append(sim_env.env.plot3(f_new.transform_points(old_cloud[:,:3]), 5, old_cloud[:,3:] if use_color else (0,1,0)))
                 handles_f.extend(draw_grid(sim_env, old_cloud[:,:3], f_new))
                 for lr in lr2newtraj.keys():
-                    handles_f.append(sim_env.env.drawlinestrip(f_new.transform_hmats(hmat_dict[lr][i_start:i_end+1])[:,:3,3], 2, (0,1,0,1)))
+                    handles_f.append(sim_env.env.drawlinestrip(f_new.transform_hmats(hmat_dict[lr][i_start - int(i_start > 0):i_end+1])[:,:3,3], 2, (0,1,0,1)))
                     handles.append(sim_env.env.drawlinestrip(sim_util.get_ee_traj(sim_env, lr, tps_traj)[:,:3,3], 2, (0,0,1,1)))
                 sim_env.viewer.Step()
 
@@ -492,6 +496,10 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
             old_ee_traj = asarray(seg_info[link_name]["hmat"])
             handles.append(sim_env.env.drawlinestrip(old_ee_traj[:,:3,3], 2, (1,0,0,1)))
             handles.append(sim_env.env.drawlinestrip(f.transform_hmats(old_ee_traj)[:,:3,3], 2, (0,1,0,1)))
+        for hmat in f.transform_hmats(np.array(closing_hmats.values())):
+            handles.append(sim_env.env.drawarrow(hmat[:3,3], hmat[:3,3]+hmat[:3,0]/10.0, 0.005, (1,0,0,1)))
+            handles.append(sim_env.env.drawarrow(hmat[:3,3], hmat[:3,3]+hmat[:3,1]/10.0, 0.005, (0,1,0,1)))
+            handles.append(sim_env.env.drawarrow(hmat[:3,3], hmat[:3,3]+hmat[:3,2]/10.0, 0.005, (0,0,1,1)))
         sim_env.viewer.Step()
 
     miniseg_starts, miniseg_ends = sim_util.split_trajectory_by_gripper(seg_info)    
