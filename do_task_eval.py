@@ -698,6 +698,9 @@ def parse_input_args():
     parser_replay = subparsers.add_parser('replay')
     parser_replay.add_argument("loadresultfile", type=str)
     parser_replay.add_argument("--compute_traj_steps", type=int, default=[], nargs='*', metavar='i_step', help="recompute trajectories for the i_step of all tasks")
+    parser_replay.add_argument("--simulate_traj_steps", type=int, default=None, nargs='*', metavar='i_step', 
+                               help="if specified, restore the rope state from file and then simulate for the i_step of all tasks")
+                               # if not specified, the rope state is not restored from file, but it is as given by the sequential simulation
 
     return parser.parse_args()
 
@@ -836,9 +839,23 @@ def replay_on_holdout(args, sim_env):
         eval_util.save_task_results_init(args.resultfile, sim_env, i_task, rope_nodes, args, rope_params)
         
         for i_step in range(len(loadresultfile[i_task]) - (1 if 'init' in loadresultfile[i_task] else 0)):
+            if args.simulate_traj_steps is not None and i_step not in args.simulate_traj_steps:
+                continue
+            
             print "task %s step %i" % (i_task, i_step)
             sim_util.reset_arms_to_side(sim_env)
 
+            restore_from_saved_trans_rots = args.simulate_traj_steps is not None
+            if restore_from_saved_trans_rots:
+                if i_step == 0:
+                    _, _, _, pre_trans, pre_rots = eval_util.load_task_results_init(args.loadresultfile, i_task)
+                else:
+                    _, _, _, pre_trans, pre_rots = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step-1)
+                time_machine.set_checkpoint('preexec_%i'%i_step, sim_env, tfs=(pre_trans, pre_rots))
+            else:
+                time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
+            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
+            
             redprint("Observe point cloud")
             if args.raycast:
                 new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
@@ -856,8 +873,6 @@ def replay_on_holdout(args, sim_env):
 
             best_action, full_trajs, q_values, trans, rots = eval_util.load_task_results_step(args.loadresultfile, sim_env, i_task, i_step)
             
-            time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
-            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
             start_time = time.time()
             if i_step in args.compute_traj_steps:
                 compute_traj_fn = select_traj_fn(loaded_args)
