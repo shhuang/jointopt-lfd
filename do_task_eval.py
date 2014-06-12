@@ -26,6 +26,7 @@ import importlib
 from itertools import combinations
 import IPython as ipy
 import random
+import hashlib
 
 COLLISION_DIST_THRESHOLD = 0.0
 MAX_ACTIONS_TO_TRY = 5  # Number of actions to try (ranked by cost), if TrajOpt trajectory is infeasible
@@ -129,22 +130,27 @@ def tps_rpm_cheap(action_cloud, state, use_color, reg_type='segment'):
     new_cloud = state[1]
     if reg_type == 'segment':
         action, action_rope_nodes = action_cloud
+        action_rope_nodes_hash = hashlib.sha1(action_rope_nodes).hexdigest()
         if action not in GlobalVars.rope_nodes_crossing_info:
             if action not in GlobalVars.actions_cache:
-                crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(action_rope_nodes)
                 action_group = GlobalVars.actions_cache.create_group(action)
-                action_group['rope_nodes'] = action_rope_nodes
-                if crossings: action_group['crossings'] = crossings
-                if crossings_links_inds: action_group['crossings_links_inds'] = crossings_links_inds
-                if cross_pairs: action_group['cross_pairs'] = list(cross_pairs)
-                action_group['rope_closed'] = rope_closed
             else:
                 action_group = GlobalVars.actions_cache[action]
-                assert np.linalg.norm(action_rope_nodes - action_group['rope_nodes'][()]) == 0.0
-                crossings =  action_group['crossings'][()] if 'crossings' in action_group else []
-                crossings_links_inds = action_group['crossings_links_inds'][()] if 'crossings_links_inds' in action_group else []
-                cross_pairs = set([tuple(p) for p in action_group['cross_pairs']]) if 'cross_pairs' in action_group else set([])
-                rope_closed = action_group['rope_closed'][()]
+            if action_rope_nodes_hash not in action_group:
+                action_array_group = action_group.create_group(action_rope_nodes_hash)
+                crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(action_rope_nodes)
+                action_array_group['rope_nodes'] = action_rope_nodes
+                if crossings: action_array_group['crossings'] = crossings
+                if crossings_links_inds: action_array_group['crossings_links_inds'] = crossings_links_inds
+                if cross_pairs: action_array_group['cross_pairs'] = list(cross_pairs)
+                action_array_group['rope_closed'] = rope_closed
+            else:
+                action_array_group = action_group[action_rope_nodes_hash]
+                assert np.all(action_rope_nodes == action_array_group['rope_nodes'][()])
+                crossings =  action_array_group['crossings'][()] if 'crossings' in action_array_group else []
+                crossings_links_inds = action_array_group['crossings_links_inds'][()] if 'crossings_links_inds' in action_array_group else []
+                cross_pairs = set([tuple(p) for p in action_array_group['cross_pairs']]) if 'cross_pairs' in action_array_group else set([])
+                rope_closed = action_array_group['rope_closed'][()]
             GlobalVars.rope_nodes_crossing_info[action] = (action_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
         state_id, state_rope_nodes = state
         if state_id not in GlobalVars.rope_nodes_crossing_info:
@@ -897,10 +903,10 @@ def replay_on_holdout(args, sim_env):
             print "BEST ACTION:", best_action
 
             replay_trans, replay_rots = sim_util.get_rope_transforms(sim_env)
-            if np.linalg.norm(trans - replay_trans) > 0 or np.linalg.norm(rots - replay_rots) > 0:
-                yellowprint("The rope transforms of the replay rope doesn't match the ones in the original result file by %f and %f" % (np.linalg.norm(trans - replay_trans), np.linalg.norm(rots - replay_rots)))
-            else:
+            if np.all(trans == replay_trans) and np.all(rots == replay_rots):
                 yellowprint("Reproducible results OK")
+            else:
+                yellowprint("The rope transforms of the replay rope doesn't match the ones in the original result file by %f and %f" % (np.linalg.norm(trans - replay_trans), np.linalg.norm(rots - replay_rots)))
             
             if not loaded_args.use_color: # for saving
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
