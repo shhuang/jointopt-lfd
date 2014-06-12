@@ -50,13 +50,21 @@ class GlobalVars:
     downsample = True
     upsample_rad = None
 
-def get_ds_cloud(sim_env, action):
+def get_action_cloud(sim_env, action):
+    rope_nodes = GlobalVars.actions[action]['cloud_xyz'][()]
+    cloud = ropesim.observe_cloud(rope_nodes, sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
+    return cloud
+
+def get_action_cloud_ds(sim_env, action):
     if GlobalVars.downsample:
         if action not in GlobalVars.actions_ds_clouds:
-            GlobalVars.actions_ds_clouds[action] = clouds.downsample(GlobalVars.actions[action]['cloud_xyz'], DS_SIZE)
+            GlobalVars.actions_ds_clouds[action] = clouds.downsample(get_action_cloud(sim_env, action), DS_SIZE)
         return GlobalVars.actions_ds_clouds[action]
     else:
-        return GlobalVars.actions[action]['cloud_xyz'][()]
+        return get_action_cloud(sim_env, action)
+
+def get_action_rope_nodes(sim_env, action):
+    return GlobalVars.actions[action]['cloud_xyz'][()]
 
 def color_cloud(xyz, endpoint_inds, endpoint_color = np.array([0,0,1]), non_endpoint_color = np.array([1,0,0])):
     xyzrgb = np.zeros((len(xyz),6))
@@ -77,8 +85,12 @@ def draw_grid(sim_env, old_xyz, f, color = (1,1,0,1)):
     grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
     return plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = color)
 
-def tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts = None, closing_hmats = None, reg_type='segment'):
+def register_tps(sim_env, state, action, use_color, interest_pts = None, closing_hmats = None, reg_type='segment'):
+    old_cloud = get_action_cloud(sim_env, action)
+    new_cloud = state[1]
     if reg_type == 'segment':
+        old_rope_nodes = get_action_rope_nodes(sim_env, action)
+        state_id, new_cloud, new_rope_nodes = state
         def plot_cb(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1):
             from rapprentice.plotting_plt import plot_tps_registration_segment_proj_2d
             import matplotlib.pyplot as plt
@@ -111,10 +123,8 @@ def tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts = None, closi
             x_weights[interest_pts_inds] = 5.0
         else:
             x_weights = None
-        cloud0 = ropesim.observe_cloud(old_cloud, sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
-        cloud1 = ropesim.observe_cloud(new_cloud, sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
-        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud, 
-                                                            cloud0 = cloud0, cloud1 = cloud1, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
+        f, corr = tps_registration.tps_segment_registration(old_rope_nodes, new_rope_nodes, 
+                                                            cloud0 = old_cloud, cloud1 = new_cloud, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
                                                             reg=0.01, x_weights=x_weights, plotting=False, plot_cb=plot_cb)
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
@@ -130,46 +140,44 @@ def tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts = None, closi
         corr = None
     return f, corr
 
-def tps_rpm_cheap(sim_env, action_cloud, state, use_color, reg_type='segment'):
-    old_cloud = action_cloud[1]
+def register_tps_cheap(sim_env, state, action, use_color, reg_type='segment'):
+    old_cloud = get_action_cloud(sim_env, action)
     new_cloud = state[1]
     if reg_type == 'segment':
-        action, action_rope_nodes = action_cloud
-        action_rope_nodes_hash = hashlib.sha1(action_rope_nodes).hexdigest()
+        old_rope_nodes = get_action_rope_nodes(sim_env, action)
+        old_rope_nodes_hash = hashlib.sha1(old_rope_nodes).hexdigest()
         if action not in GlobalVars.rope_nodes_crossing_info:
             if action not in GlobalVars.actions_cache:
                 action_group = GlobalVars.actions_cache.create_group(action)
             else:
                 action_group = GlobalVars.actions_cache[action]
-            if action_rope_nodes_hash not in action_group:
-                action_array_group = action_group.create_group(action_rope_nodes_hash)
-                crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(action_rope_nodes)
-                action_array_group['rope_nodes'] = action_rope_nodes
-                if crossings: action_array_group['crossings'] = crossings
-                if crossings_links_inds: action_array_group['crossings_links_inds'] = crossings_links_inds
-                if cross_pairs: action_array_group['cross_pairs'] = list(cross_pairs)
-                action_array_group['rope_closed'] = rope_closed
+            if old_rope_nodes_hash not in action_group:
+                action_rope_nodes_group = action_group.create_group(old_rope_nodes_hash)
+                crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(old_rope_nodes)
+                action_rope_nodes_group['rope_nodes'] = old_rope_nodes
+                if crossings: action_rope_nodes_group['crossings'] = crossings
+                if crossings_links_inds: action_rope_nodes_group['crossings_links_inds'] = crossings_links_inds
+                if cross_pairs: action_rope_nodes_group['cross_pairs'] = list(cross_pairs)
+                action_rope_nodes_group['rope_closed'] = rope_closed
             else:
-                action_array_group = action_group[action_rope_nodes_hash]
-                assert np.all(action_rope_nodes == action_array_group['rope_nodes'][()])
-                crossings =  action_array_group['crossings'][()] if 'crossings' in action_array_group else []
-                crossings_links_inds = action_array_group['crossings_links_inds'][()] if 'crossings_links_inds' in action_array_group else []
-                cross_pairs = set([tuple(p) for p in action_array_group['cross_pairs']]) if 'cross_pairs' in action_array_group else set([])
-                rope_closed = action_array_group['rope_closed'][()]
-            GlobalVars.rope_nodes_crossing_info[action] = (action_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
-        state_id, state_rope_nodes = state
+                action_rope_nodes_group = action_group[old_rope_nodes_hash]
+                assert np.all(old_rope_nodes == action_rope_nodes_group['rope_nodes'][()])
+                crossings =  action_rope_nodes_group['crossings'][()] if 'crossings' in action_rope_nodes_group else []
+                crossings_links_inds = action_rope_nodes_group['crossings_links_inds'][()] if 'crossings_links_inds' in action_rope_nodes_group else []
+                cross_pairs = set([tuple(p) for p in action_rope_nodes_group['cross_pairs']]) if 'cross_pairs' in action_rope_nodes_group else set([])
+                rope_closed = action_rope_nodes_group['rope_closed'][()]
+            GlobalVars.rope_nodes_crossing_info[action] = (old_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
+        state_id, new_cloud, new_rope_nodes = state
         if state_id not in GlobalVars.rope_nodes_crossing_info:
-            crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(state_rope_nodes)
-            GlobalVars.rope_nodes_crossing_info[state_id] = (state_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
+            crossings, crossings_links_inds, cross_pairs, rope_closed = calculateCrossings(new_rope_nodes)
+            GlobalVars.rope_nodes_crossing_info[state_id] = (new_rope_nodes, crossings, crossings_links_inds, cross_pairs, rope_closed)
         def plot_cb(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1):
             from rapprentice.plotting_plt import plot_tps_registration_segment_proj_2d
             import matplotlib.pyplot as plt
             plot_tps_registration_segment_proj_2d(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1)
             plt.show()
-        cloud0 = ropesim.observe_cloud(GlobalVars.rope_nodes_crossing_info[action][0], sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
-        cloud1 = ropesim.observe_cloud(GlobalVars.rope_nodes_crossing_info[state_id][0], sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
         f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id], 
-                                                            cloud0 = cloud0, cloud1 = cloud1, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
+                                                            cloud0 = old_cloud, cloud1 = new_cloud, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
                                                             reg=0.01, plotting=False, plot_cb=plot_cb)
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
@@ -184,7 +192,7 @@ def tps_rpm_cheap(sim_env, action_cloud, state, use_color, reg_type='segment'):
         corr = None
     return f, corr
 
-def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, interactive=False, simulate=True):
+def compute_trans_traj(sim_env, state, action, use_color, animate=False, interactive=False, simulate=True):
     seg_info = GlobalVars.actions[action]
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
@@ -192,8 +200,10 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
     redprint("Generating end-effector trajectory")    
     
     cloud_dim = 6 if use_color else 3
+    _, new_cloud, new_rope_nodes = state
     new_cloud = new_cloud[:,:cloud_dim]
-    old_cloud = get_ds_cloud(sim_env, action)[:,:cloud_dim]
+    old_cloud = get_action_cloud_ds(sim_env, action)[:,:cloud_dim]
+    old_rope_nodes = get_action_rope_nodes(sim_env, action)
     
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
@@ -206,7 +216,7 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
     for lr in closing_inds:
         if closing_inds[lr] != -1:
             closing_hmats[lr] = seg_info["%s_gripper_tool_frame"%lr]['hmat'][closing_inds[lr]]
-    f, corr = tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
+    f, corr = register_tps(sim_env, state, action, use_color, interest_pts, closing_hmats=closing_hmats)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -320,7 +330,7 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
     
     return success, feasible, misgrasp, full_trajs
 
-def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=False, interactive=False, simulate=True):
+def compute_trans_traj_jointopt(sim_env, state, action, use_color, animate=False, interactive=False, simulate=True):
     seg_info = GlobalVars.actions[action]
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
@@ -328,8 +338,10 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
     redprint("Generating end-effector trajectory")    
     
     cloud_dim = 6 if use_color else 3
+    _, new_cloud, new_rope_nodes = state
     new_cloud = new_cloud[:,:cloud_dim]
-    old_cloud = get_ds_cloud(sim_env, action)[:,:cloud_dim]
+    old_cloud = get_action_cloud_ds(sim_env, action)[:,:cloud_dim]
+    old_rope_nodes = get_action_rope_nodes(sim_env, action)
 
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     hmat_list = [(lr, seg_info[ln]['hmat']) for lr, ln in zip('lr', link_names)]
@@ -338,7 +350,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
         interest_pts = get_closing_pts(seg_info)
     else:
         interest_pts = None
-    f, corr = tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts)
+    f, corr = register_tps(sim_env, state, action, use_color, interest_pts)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -481,13 +493,15 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
     
     return success, feasible, misgrasp, full_trajs
 
-def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animate=False, interactive=False):
+def simulate_demo_traj(sim_env, state, action, use_color, full_trajs, animate=False, interactive=False):
     seg_info = GlobalVars.actions[action]
     sim_util.reset_arms_to_side(sim_env)
 
     cloud_dim = 6 if use_color else 3
+    _, new_cloud, new_rope_nodes = state
     new_cloud = new_cloud[:,:cloud_dim]
-    old_cloud = get_ds_cloud(sim_env, action)[:,:cloud_dim]
+    old_cloud = get_action_cloud_ds(sim_env, action)[:,:cloud_dim]
+    old_rope_nodes = get_action_rope_nodes(sim_env, action)
 
     if GlobalVars.gripper_weighting:
         interest_pts = get_closing_pts(seg_info)
@@ -498,7 +512,7 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
     for lr in closing_inds:
         if closing_inds[lr] != -1:
             closing_hmats[lr] = seg_info["%s_gripper_tool_frame"%lr]['hmat'][closing_inds[lr]]
-    f, corr = tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
+    f, corr = register_tps(sim_env, state, action, use_color, interest_pts, closing_hmats=closing_hmats)
 
     handles = []
     if animate:
@@ -565,8 +579,7 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
     return success, feasible, misgrasp, full_trajs
 
 def regcost_feature_fn(sim_env, state, action, use_color):
-    action_cloud = (action, get_ds_cloud(sim_env, action))
-    f, corr = tps_rpm_cheap(sim_env, action_cloud, state, use_color)
+    f, corr = register_tps_cheap(sim_env, state, action, use_color)
     if f is None:
         cost = np.inf
     else:
@@ -574,25 +587,25 @@ def regcost_feature_fn(sim_env, state, action, use_color):
     return np.array([float(cost)]) # no need to normalize since bending cost is independent of number of points
    
 def regcost_trajopt_feature_fn(sim_env, state, action):
-    regcost = registration_cost_cheap(state[1], get_ds_cloud(sim_env, action))
+    regcost = registration_cost_cheap(state[1], get_action_cloud_ds(sim_env, action))
     pose_cost = compute_trans_traj(sim_env, state[1], GlobalVars.actions[action], simulate=False)
 
     # don't rescale by alpha and beta
     # pose_cost should already be normalized by 1/n_steps and rescaled by 1/beta
     # (original trajopt cost has constant multiplier of beta/n_steps)
-    print "Regcost:", float(regcost) / get_ds_cloud(sim_env, action).shape[0], "Total", float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(pose_cost)
-    GlobalVars.tps_errors_top10.append(float(regcost) / get_ds_cloud(sim_env, action).shape[0])
+    print "Regcost:", float(regcost) / get_action_cloud_ds(sim_env, action).shape[0], "Total", float(regcost) / get_action_cloud_ds(sim_env, action).shape[0] + float(pose_cost)
+    GlobalVars.tps_errors_top10.append(float(regcost) / get_action_cloud_ds(sim_env, action).shape[0])
     GlobalVars.trajopt_errors_top10.append(float(pose_cost))
-    print "tps_cost, tps_pose_cost", float(regcost) / get_ds_cloud(sim_env, action).shape[0], pose_cost
-    return np.array([float(regcost) / get_ds_cloud(sim_env, action).shape[0] + float(pose_cost)])  # TODO: Consider regcost + C*err
+    print "tps_cost, tps_pose_cost", float(regcost) / get_action_cloud_ds(sim_env, action).shape[0], pose_cost
+    return np.array([float(regcost) / get_action_cloud_ds(sim_env, action).shape[0] + float(pose_cost)])  # TODO: Consider regcost + C*err
 
 def regcost_trajopt_tps_feature_fn(sim_env, state, action):
     link_names = ["%s_gripper_tool_frame"%lr for lr in ('lr')]
     new_pts = state[1]
-    demo_pts = get_ds_cloud(sim_env, action)
+    demo_pts = get_action_cloud_ds(sim_env, action)
 
     # TrajOpt 
-    target_trajs = warp_hmats(get_ds_cloud(sim_env, action), state[1],[(lr, GlobalVars.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
+    target_trajs = warp_hmats(get_action_cloud_ds(sim_env, action), state[1],[(lr, GlobalVars.actions[action][ln]['hmat']) for lr, ln in zip('lr', link_names)], None)[0]
     orig_joint_trajs = traj_utils.joint_trajs(action, GlobalVars.actions)
     feasible_trajs, err = follow_trajectory_cost(sim_env, target_trajs, orig_joint_trajs, sim_env.robot)
 
@@ -790,12 +803,13 @@ def eval_on_holdout(args, sim_env):
                 if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
                     break
             else:
-                new_cloud = sim_env.sim.observe_cloud()
+                new_cloud = sim_env.sim.observe_cloud(upsample_rad=args.upsample_rad)
                 endpoint_inds = np.zeros(len(new_cloud), dtype=bool) # for now, args.raycast=False is not compatible with args.use_color=True
             if args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
             new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
-            state = ("eval_%i"%get_unique_id(), new_cloud_ds)
+            new_rope_nodes = sim_env.sim.rope.GetControlPoints()
+            state = ("eval_%i"%get_unique_id(), new_cloud_ds, new_rope_nodes)
     
             num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
             eval_stats = eval_util.EvalStats()
@@ -809,7 +823,7 @@ def eval_on_holdout(args, sim_env):
                 time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(rope_params))
                 best_root_action = agenda[i_choice][1]
                 start_time = time.time()
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud_ds, best_root_action, args.use_color, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, state, best_root_action, args.use_color, animate=args.animation, interactive=args.interactive)
                 eval_stats.exec_elapsed_time += time.time() - start_time
 
                 if eval_stats.feasible:  # try next action if TrajOpt cannot find feasible action
@@ -825,9 +839,10 @@ def eval_on_holdout(args, sim_env):
             if not args.use_color: # for saving
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
                 new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
-            demo_cloud = GlobalVars.actions[best_root_action]['cloud_xyz'][()]
-            demo_cloud_ds = get_ds_cloud(sim_env, best_root_action)
-            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
+            demo_cloud = get_action_cloud(sim_env, best_root_action)
+            demo_cloud_ds = get_action_cloud_ds(sim_env, best_root_action)
+            demo_rope_nodes = get_action_rope_nodes(sim_env, best_root_action)
+            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_root_action, full_trajs, q_values_root, demo_cloud, demo_cloud_ds, demo_rope_nodes, new_cloud, new_cloud_ds, new_rope_nodes)
             
             if not eval_stats.found_feasible_action:
                 # Skip to next knot tie if the action is infeasible -- since
@@ -888,12 +903,13 @@ def replay_on_holdout(args, sim_env):
                 if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
                     break
             else:
-                new_cloud = sim_env.sim.observe_cloud()
+                new_cloud = sim_env.sim.observe_cloud(upsample_rad=args.upsample_rad)
                 endpoint_inds = np.zeros(len(new_cloud), dtype=bool) # for now, args.raycast=False is not compatible with args.use_color=True
             if loaded_args.use_color:
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
             new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
-            state = ("eval_%i"%get_unique_id(), new_cloud_ds)
+            new_rope_nodes = sim_env.sim.rope.GetControlPoints()
+            state = ("eval_%i"%get_unique_id(), new_cloud_ds, new_rope_nodes)
     
             eval_stats = eval_util.EvalStats()
 
@@ -902,9 +918,9 @@ def replay_on_holdout(args, sim_env):
             start_time = time.time()
             if i_step in args.compute_traj_steps:
                 compute_traj_fn = select_traj_fn(loaded_args)
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, new_cloud_ds, best_action, loaded_args.use_color, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_traj_fn(sim_env, state, best_action, loaded_args.use_color, animate=args.animation, interactive=args.interactive)
             else:
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, new_cloud_ds, best_action, loaded_args.use_color, full_trajs, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = simulate_demo_traj(sim_env, state, best_action, loaded_args.use_color, full_trajs, animate=args.animation, interactive=args.interactive)
             eval_stats.exec_elapsed_time += time.time() - start_time
 
             if eval_stats.feasible:
@@ -923,9 +939,10 @@ def replay_on_holdout(args, sim_env):
             if not loaded_args.use_color: # for saving
                 new_cloud = color_cloud(new_cloud, endpoint_inds)
                 new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
-            demo_cloud = GlobalVars.actions[best_action]['cloud_xyz'][()]
-            demo_cloud_ds = get_ds_cloud(sim_env, best_action)
-            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values, demo_cloud, demo_cloud_ds, new_cloud, new_cloud_ds)
+            demo_cloud = get_action_rope_nodes(sim_env, best_action)
+            demo_cloud_ds = get_action_cloud_ds(sim_env, best_action)
+            demo_rope_nodes = get_action_rope_nodes(sim_env, best_action)
+            eval_util.save_task_results_step(args.resultfile, sim_env, i_task, i_step, eval_stats, best_action, full_trajs, q_values, demo_cloud, demo_cloud_ds, demo_rope_nodes, new_cloud, new_cloud_ds, new_rope_nodes)
             
             if not eval_stats.found_feasible_action:
                 # Skip to next knot tie if the action is infeasible -- since
