@@ -48,6 +48,7 @@ class GlobalVars:
     actions_ds_clouds = {}
     rope_nodes_crossing_info = {}
     downsample = True
+    upsample_rad = None
 
 def get_ds_cloud(sim_env, action):
     if GlobalVars.downsample:
@@ -76,7 +77,7 @@ def draw_grid(sim_env, old_xyz, f, color = (1,1,0,1)):
     grid_maxs = grid_means + (old_xyz.max(axis=0) - old_xyz.min(axis=0))
     return plotting_openrave.draw_grid(sim_env.env, f.transform_points, grid_mins, grid_maxs, xres = .1, yres = .1, zres = .04, color = color)
 
-def tps_rpm(old_cloud, new_cloud, use_color, interest_pts = None, closing_hmats = None, reg_type='segment'):
+def tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts = None, closing_hmats = None, reg_type='segment'):
     if reg_type == 'segment':
         def plot_cb(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1):
             from rapprentice.plotting_plt import plot_tps_registration_segment_proj_2d
@@ -110,7 +111,11 @@ def tps_rpm(old_cloud, new_cloud, use_color, interest_pts = None, closing_hmats 
             x_weights[interest_pts_inds] = 5.0
         else:
             x_weights = None
-        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud, reg=0.01, x_weights=x_weights, plotting=False, plot_cb=plot_cb)
+        cloud0 = ropesim.observe_cloud(old_cloud, sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
+        cloud1 = ropesim.observe_cloud(new_cloud, sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
+        f, corr = tps_registration.tps_segment_registration(old_cloud, new_cloud, 
+                                                            cloud0 = cloud0, cloud1 = cloud1, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
+                                                            reg=0.01, x_weights=x_weights, plotting=False, plot_cb=plot_cb)
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
@@ -125,7 +130,7 @@ def tps_rpm(old_cloud, new_cloud, use_color, interest_pts = None, closing_hmats 
         corr = None
     return f, corr
 
-def tps_rpm_cheap(action_cloud, state, use_color, reg_type='segment'):
+def tps_rpm_cheap(sim_env, action_cloud, state, use_color, reg_type='segment'):
     old_cloud = action_cloud[1]
     new_cloud = state[1]
     if reg_type == 'segment':
@@ -161,7 +166,11 @@ def tps_rpm_cheap(action_cloud, state, use_color, reg_type='segment'):
             import matplotlib.pyplot as plt
             plot_tps_registration_segment_proj_2d(rope_nodes0, rope_nodes1, corr_nm, f, pts_segmentation_inds0, pts_segmentation_inds1)
             plt.show()
-        f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id], reg=0.01, plotting=False, plot_cb=plot_cb)
+        cloud0 = ropesim.observe_cloud(GlobalVars.rope_nodes_crossing_info[action][0], sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
+        cloud1 = ropesim.observe_cloud(GlobalVars.rope_nodes_crossing_info[state_id][0], sim_env.sim.rope.GetHalfHeights(), sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
+        f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id], 
+                                                            cloud0 = cloud0, cloud1 = cloud1, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
+                                                            reg=0.01, plotting=False, plot_cb=plot_cb)
     elif reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=14, em_iter=1, vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
@@ -197,7 +206,7 @@ def compute_trans_traj(sim_env, new_cloud, action, use_color, animate=False, int
     for lr in closing_inds:
         if closing_inds[lr] != -1:
             closing_hmats[lr] = seg_info["%s_gripper_tool_frame"%lr]['hmat'][closing_inds[lr]]
-    f, corr = tps_rpm(old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
+    f, corr = tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -329,7 +338,7 @@ def compute_trans_traj_jointopt(sim_env, new_cloud, action, use_color, animate=F
         interest_pts = get_closing_pts(seg_info)
     else:
         interest_pts = None
-    f, corr = tps_rpm(old_cloud, new_cloud, use_color, interest_pts)
+    f, corr = tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts)
     lr2eetraj = {}
     for k, hmats in hmat_list:
         lr2eetraj[k] = f.transform_hmats(hmats)
@@ -489,7 +498,7 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
     for lr in closing_inds:
         if closing_inds[lr] != -1:
             closing_hmats[lr] = seg_info["%s_gripper_tool_frame"%lr]['hmat'][closing_inds[lr]]
-    f, corr = tps_rpm(old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
+    f, corr = tps_rpm(sim_env, old_cloud, new_cloud, use_color, interest_pts, closing_hmats=closing_hmats)
 
     handles = []
     if animate:
@@ -557,7 +566,7 @@ def simulate_demo_traj(sim_env, new_cloud, action, use_color, full_trajs, animat
 
 def regcost_feature_fn(sim_env, state, action, use_color):
     action_cloud = (action, get_ds_cloud(sim_env, action))
-    f, corr = tps_rpm_cheap(action_cloud, state, use_color)
+    f, corr = tps_rpm_cheap(sim_env, action_cloud, state, use_color)
     if f is None:
         cost = np.inf
     else:
@@ -649,6 +658,8 @@ def set_global_vars(args, sim_env):
         global clouds
         from rapprentice import clouds
     
+    GlobalVars.upsample_rad = args.upsample_rad
+    
 def select_feature_fn(warping_cost, args):
     if warping_cost == "regcost":
         feature_fn = lambda sim_env, state, action: regcost_feature_fn(sim_env, state, action, args.use_color)
@@ -680,6 +691,7 @@ def parse_input_args():
     parser.add_argument("--resultfile", type=str, help="no results are saved if this is not specified")
     parser.add_argument("--raycast", type=int, default=0, help="use raycast or rope nodes observation model")
     parser.add_argument("--downsample", type=int, default=1)
+    parser.add_argument("--upsample_rad", type=int, default=1, help="upsample_rad > 1 incompatible with downsample != 0")
 
     # selects tasks to evaluate/replay
     parser.add_argument("--tasks", type=int, nargs='*', metavar="i_task")
