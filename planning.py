@@ -1,7 +1,7 @@
 from __future__ import division
 import openravepy,trajoptpy, numpy as np, json
 import util
-from rapprentice import tps, math_utils as mu
+from rapprentice import tps, registration, math_utils as mu
 from rapprentice.registration import ThinPlateSpline
 import IPython as ipy
 
@@ -99,36 +99,142 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj, beta_pos =
     return traj, pose_costs
 
 
-def prepare_tps_fit3(x_na, y_ng, bend_coef, rot_coef, wt_n):
+def tps_fit3_ext(x_na, y_ng, bend_coef, rot_coef, wt_n):
     if wt_n is None: wt_n = np.ones(len(x_na))
     n,d = x_na.shape
-
+    
     K_nn = tps.tps_kernel_matrix(x_na)
     Q = np.c_[np.ones((n,1)), x_na, K_nn]
-    WQ = wt_n[:,None] * Q
-    QWQ = Q.T.dot(WQ)
-    H = QWQ
-    H[d+1:,d+1:] += bend_coef * K_nn
     rot_coefs = np.ones(d) * rot_coef if np.isscalar(rot_coef) else rot_coef
-    H[1:d+1, 1:d+1] += np.diag(rot_coefs)
-    f = -2.0*WQ.T.dot(y_ng)
-    f[1:d+1,0:d] -= np.diag(rot_coefs)
-    
-    A = np.r_[np.zeros((d+1,d+1)), np.c_[np.ones((n,1)), x_na]].T
 
-    n_vars = H.shape[0]
-    assert H.shape[1] == n_vars
-    assert f.shape[0] == n_vars
-    assert A.shape[1] == n_vars
+    A = np.r_[np.zeros((d+1,d+1)), np.c_[np.ones((n,1)), x_na]].T
     n_cnts = A.shape[0]
-    
     _u,_s,_vh = np.linalg.svd(A.T)
     N = _u[:,n_cnts:]
     
-    z = np.linalg.solve(2.0*N.T.dot(H.dot(N)), -N.T.dot(f))
+    solve_dim_separately = not np.isscalar(bend_coef) or (wt_n.ndim > 1 and wt_n.shape[1] > 1)
     
-    return H, f, A, N, z, wt_n, rot_coefs
+    if solve_dim_separately:
+        bend_coefs = np.ones(d) * bend_coef if np.isscalar(bend_coef) else bend_coef
+        if wt_n.ndim == 1:
+            wt_n = wt_n[:,None]
+        if wt_n.shape[1] == 1:
+            wt_n = np.tile(wt_n, (1,d))
+        z = np.empty((n,d))
+        for i in range(d):
+            WQ = wt_n[:,i][:,None] * Q
+            QWQ = Q.T.dot(WQ)
+            H = QWQ
+            H[d+1:,d+1:] += bend_coefs[i] * K_nn
+            H[1:d+1, 1:d+1] += np.diag(rot_coefs)
+             
+            f = -WQ.T.dot(y_ng[:,i])
+            f[1+i] -= rot_coefs[i]
+             
+            z[:,i] = np.linalg.solve(N.T.dot(H.dot(N)), -N.T.dot(f))
+    else:
+        WQ = wt_n[:,None] * Q
+        QWQ = Q.T.dot(WQ)
+        H = QWQ
+        H[d+1:,d+1:] += bend_coef * K_nn
+        H[1:d+1, 1:d+1] += np.diag(rot_coefs)
+        
+        f = -WQ.T.dot(y_ng)
+        f[1:d+1,0:d] -= np.diag(rot_coefs)
+        
+        z = np.linalg.solve(N.T.dot(H.dot(N)), -N.T.dot(f))
+    
+    return N, z
 
+def tps_obj(f, x_na, y_ng, bend_coefs, rot_coefs, wt_n):
+    K_nn = tps.tps_kernel_matrix(x_na)
+    _,d = x_na.shape
+    cost = 0
+    # matching cost
+    cost += np.linalg.norm((f.transform_points(x_na) - y_ng) * np.sqrt(wt_n))**2
+    # same as (np.square(np.apply_along_axis(np.linalg.norm, 1, f.transform_points(x_na) - y_ng)) * wt_n).sum()
+    # bending cost
+    cost += np.trace(np.diag(bend_coefs).dot(f.w_ng.T.dot(K_nn.dot(f.w_ng))))
+    # rotation cost
+    cost += np.trace((f.lin_ag - np.eye(d)).T.dot(np.diag(rot_coefs).dot((f.lin_ag - np.eye(d)))))
+#     # constants
+#     cost -= np.linalg.norm(y_ng * np.sqrt(wt_n))**2
+#     cost -= np.trace(np.diag(rot_coefs))
+    return cost
+
+def fit_ThinPlateSpline(x_na, y_ng, bend_coef=.1, rot_coef = 1e-5, wt_n=None):
+    env = openravepy.Environment()
+    env.StopSimulation()
+    env.Load("./data/misc/pr2-beta-static-decomposed-shoulder.zae")
+    robot = env.GetRobots()[0]
+    alpha = 1.0
+    
+    (n,d) = x_na.shape
+
+    # expand these
+    bend_coefs = np.ones(d) * bend_coef if np.isscalar(bend_coef) else bend_coef
+    rot_coefs = np.ones(d) * rot_coef if np.isscalar(rot_coef) else rot_coef
+    if wt_n is None: wt_n = np.ones(len(x_na))
+    if wt_n.ndim == 1:
+        wt_n = wt_n[:,None]
+    if wt_n.shape[1] == 1:
+        wt_n = np.tile(wt_n, (1,d))
+    
+    N, z = tps_fit3_ext(x_na, y_ng, bend_coefs, rot_coefs, wt_n)
+    
+    n_steps = 1 #dummy
+
+    request = {
+        "basic_info" : {
+            "n_steps" : n_steps,
+            "m_ext" : n, 
+            "n_ext" : d,
+            "manip" : "leftarm", #dummy
+            "start_fixed" : False
+        },
+        "costs" : [
+        {
+            "type" : "tps",
+            "name" : "tps",
+            "params" : {"x_na" : [row.tolist() for row in x_na],
+                        "y_ng" : [row.tolist() for row in y_ng],
+                        "bend_coefs" : bend_coefs.tolist(),
+                        "rot_coefs" : rot_coefs.tolist(),
+                        "wt_n" : [row.tolist() for row in wt_n],
+                        "N" : [row.tolist() for row in N],
+                        "alpha" : alpha,
+            }
+        },
+        ],
+        "constraints" : [
+        ],
+    }
+    request['init_info'] = {
+                                "type":"given_traj",
+                                "data":[robot.GetDOFValues(robot.GetManipulator("leftarm").GetArmIndices()).tolist()],
+                                "data_ext":[row.tolist() for row in z]
+                           }
+    
+    s = json.dumps(request)
+    with openravepy.RobotStateSaver(robot):
+        prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
+        result = trajoptpy.OptimizeProblem(prob) # do optimization
+    print result.GetCosts()
+    print result.GetConstraints()
+    traj = result.GetTraj()
+    theta = N.dot(result.GetExt())
+    f = ThinPlateSpline()
+    f.trans_g = theta[0,:];
+    f.lin_ag = theta[1:d+1,:];
+    f.w_ng = theta[d+1:];
+    f.x_na = x_na
+    
+    tps_cost = 0
+    for (cost_type, cost_val) in result.GetCosts():
+        if cost_type == "tps":
+            tps_cost += cost_val
+
+    return f, tps_cost
 
 def joint_fit_tps_follow_traj(robot, manip_name, ee_links, fn, old_hmats_list, old_trajs, x_na, y_ng, alpha = 1., beta_pos = 1000.0, beta_rot = 10, bend_coef=.1, rot_coef = 1e-5, wt_n=None):
     """
