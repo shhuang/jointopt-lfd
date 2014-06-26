@@ -7,6 +7,7 @@ import numpy as np
 import h5py
 import IPython as ipy
 import os 
+import time
 
 class Bunch(object):
   def __init__(self, adict):
@@ -21,7 +22,12 @@ class suppress_stdout(object):
     '''
     def __init__(self):
         # Open a null file
-        self.null_fds =  os.open(os.devnull,os.O_RDWR)
+        while (True):
+            try:
+                self.null_fds =  os.open(os.devnull,os.O_RDWR)
+                break
+            except OSError:
+                time.sleep(1)
         # Save the actual stdout file descriptor
         self.save_fds = os.dup(1)
 
