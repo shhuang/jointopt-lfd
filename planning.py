@@ -93,8 +93,6 @@ def plan_follow_traj(robot, manip_name, ee_link, new_hmats, old_traj,
         with util.suppress_stdout():
             prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
             result = trajoptpy.OptimizeProblem(prob) # do optimization
-    print result.GetCosts()
-    print result.GetConstraints()
     traj = result.GetTraj()
     
     pose_costs = np.sum([cost_val for (cost_type, cost_val) in result.GetCosts() if cost_type == "pose"])
@@ -233,8 +231,6 @@ def plan_follow_finger_pts_traj(robot, manip_name, flr2finger_link, flr2finger_r
         with util.suppress_stdout():
             prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
             result = trajoptpy.OptimizeProblem(prob) # do optimization
-    print result.GetCosts()
-    print result.GetConstraints()
     traj = result.GetTraj()    
 
     rel_pts_costs = np.sum([cost_val for (cost_type, cost_val) in result.GetCosts() if cost_type == "rel_pts"])
@@ -420,8 +416,6 @@ def fit_ThinPlateSpline(x_na, y_ng, bend_coef=.1, rot_coef = 1e-5, wt_n=None):
     with openravepy.RobotStateSaver(robot):
         prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
         result = trajoptpy.OptimizeProblem(prob) # do optimization
-    print result.GetCosts()
-    print result.GetConstraints()
     traj = result.GetTraj()
     theta = N.dot(result.GetExt())
     f = ThinPlateSpline()
@@ -642,8 +636,6 @@ def joint_fit_tps_follow_finger_pts_traj(robot, manip_name, flr2finger_link, flr
         with util.suppress_stdout():
             prob = trajoptpy.ConstructProblem(s, robot.GetEnv()) # create object that stores optimization problem
             result = trajoptpy.OptimizeProblem(prob) # do optimization
-    print result.GetCosts()
-    print result.GetConstraints()
     traj = result.GetTraj()
     z = result.GetExt()
     theta = N.dot(z)
