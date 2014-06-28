@@ -4,9 +4,9 @@ from __future__ import division
 
 import pprint
 import argparse
-import planning, eval_util, sim_util, util
+import eval_util, sim_util, util
 import tps_registration as tps_registration_old
-from rapprentice import tps_registration
+from rapprentice import tps_registration, planning
  
 from rapprentice import registration, colorize, berkeley_pr2, \
      animate_traj, ros2rave, plotting_openrave, task_execution, \
@@ -42,26 +42,23 @@ class GlobalVars:
     trajopt_errors_top10 = []
     actions_ds_clouds = {}
     rope_nodes_crossing_info = {}
-    downsample = True
-    upsample = None
-    upsample_rad = None
 
-def get_action_cloud(sim_env, action):
-    rope_nodes = get_action_rope_nodes(sim_env, action)
-    cloud = ropesim.observe_cloud(rope_nodes, sim_env.sim.rope_params.radius, upsample_rad=GlobalVars.upsample_rad)
+def get_action_cloud(sim_env, action, args_eval):
+    rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
+    cloud = ropesim.observe_cloud(rope_nodes, sim_env.sim.rope_params.radius, upsample_rad=args_eval.upsample_rad)
     return cloud
 
-def get_action_cloud_ds(sim_env, action):
-    if GlobalVars.downsample:
+def get_action_cloud_ds(sim_env, action, args_eval):
+    if args_eval.downsample:
         if action not in GlobalVars.actions_ds_clouds:
             GlobalVars.actions_ds_clouds[action] = clouds.downsample(get_action_cloud(sim_env, action), DS_SIZE)
         return GlobalVars.actions_ds_clouds[action]
     else:
-        return get_action_cloud(sim_env, action)
+        return get_action_cloud(sim_env, action, args_eval)
 
-def get_action_rope_nodes(sim_env, action):
+def get_action_rope_nodes(sim_env, action, args_eval):
     rope_nodes = GlobalVars.actions[action]['cloud_xyz'][()]
-    return ropesim.observe_cloud(rope_nodes, sim_env.sim.rope_params.radius, upsample=GlobalVars.upsample)
+    return ropesim.observe_cloud(rope_nodes, sim_env.sim.rope_params.radius, upsample=args_eval.upsample)
 
 def color_cloud(xyz, endpoint_inds, endpoint_color = np.array([0,0,1]), non_endpoint_color = np.array([1,0,0])):
     xyzrgb = np.zeros((len(xyz),6))
@@ -96,11 +93,11 @@ def draw_finger_pts_traj(sim_env, flr2finger_pts_traj, color):
             handles.append(sim_env.env.drawlinestrip(np.r_[pts, pts[0][None,:]], 1, color))
     return handles
 
-def register_tps(sim_env, state, action, use_color, interest_pts = None, closing_hmats = None, closing_finger_pts = None, reg_type='segment'):
-    old_cloud = get_action_cloud(sim_env, action)
+def register_tps(sim_env, state, action, args_eval, interest_pts = None, closing_hmats = None, closing_finger_pts = None, reg_type='segment'):
+    old_cloud = get_action_cloud(sim_env, action, args_eval)
     new_cloud = state[1]
     if reg_type == 'segment':
-        old_rope_nodes = get_action_rope_nodes(sim_env, action)
+        old_rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
         state_id, new_cloud, new_rope_nodes = state
         def plot_cb(rope_nodes0, rope_nodes1, cloud0, cloud1, corr_nm, corr_nm_aug, f, pts_segmentation_inds0, pts_segmentation_inds1):
             from rapprentice.plotting_plt import plot_tps_registration_segment_proj_2d
@@ -189,16 +186,16 @@ def register_tps(sim_env, state, action, use_color, interest_pts = None, closing
             plt.show()
         x_weights = np.ones(len(old_cloud)) * 1.0/len(old_cloud)
         f, corr = tps_registration.tps_segment_registration(old_rope_nodes, new_rope_nodes, 
-                                                        cloud0 = old_cloud, cloud1 = new_cloud, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
+                                                        cloud0 = old_cloud, cloud1 = new_cloud, corr_tile_pattern = np.eye(args_eval.upsample_rad), 
                                                         reg=np.array([0.00015, 0.00015, 0.0015]), x_weights=x_weights, plotting=False, plot_cb=plot_cb)
         if corr is not None:
-            corr = tps_registration.tile(corr, np.eye(GlobalVars.upsample_rad))
+            corr = tps_registration.tile(corr, np.eye(args_eval.upsample_rad))
         
     elif reg_type == 'rpm':
-        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
     elif reg_type == 'bij':
-        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         x_nd = old_cloud[:,:3]
         y_md = new_cloud[:,:3]
         scaled_x_nd, src_params = registration.unit_boxify(x_nd)
@@ -208,11 +205,11 @@ def register_tps(sim_env, state, action, use_color, interest_pts = None, closing
         corr = None
     return f, corr
 
-def register_tps_cheap(sim_env, state, action, use_color, reg_type='segment'):
-    old_cloud = get_action_cloud(sim_env, action)
+def register_tps_cheap(sim_env, state, action, args_eval, reg_type='segment'):
+    old_cloud = get_action_cloud(sim_env, action, args_eval)
     new_cloud = state[1]
     if reg_type == 'segment':
-        old_rope_nodes = get_action_rope_nodes(sim_env, action)
+        old_rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
         old_rope_nodes_hash = hashlib.sha1(old_rope_nodes).hexdigest()
         if action not in GlobalVars.rope_nodes_crossing_info:
             if action not in GlobalVars.actions_cache:
@@ -246,13 +243,13 @@ def register_tps_cheap(sim_env, state, action, use_color, reg_type='segment'):
             plt.show()
         x_weights = np.ones(len(old_cloud)) * 1.0/len(old_cloud)
         f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id], 
-                                                            cloud0 = old_cloud, cloud1 = new_cloud, corr_tile_pattern = np.eye(GlobalVars.upsample_rad), 
+                                                            cloud0 = old_cloud, cloud1 = new_cloud, corr_tile_pattern = np.eye(args_eval.upsample_rad), 
                                                             reg=np.array([0.00015, 0.00015, 0.0015]), x_weights=x_weights, plotting=False, plot_cb=plot_cb)
     elif reg_type == 'rpm':
-        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=14, em_iter=1, vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
     elif reg_type == 'bij':
-        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if use_color else None
+        vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         x_nd = old_cloud[:,:3]
         y_md = new_cloud[:,:3]
         scaled_x_nd, src_params = registration.unit_boxify(x_nd)
@@ -261,14 +258,21 @@ def register_tps_cheap(sim_env, state, action, use_color, reg_type='segment'):
         corr = None
     return f, corr
 
-def compute_trans_traj(sim_env, state_or_get_state_fn, action, use_color, i_step, alpha, beta_pos, beta_rot, gamma, animate=False, interactive=False, simulate=True, transferopt='joint', replay_full_trajs=None):
+def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval, transferopt=None, animate=False, interactive=False, simulate=True, replay_full_trajs=None):
+    alpha = args_eval.alpha
+    beta_pos = args_eval.beta_pos
+    beta_rot = args_eval.beta_rot
+    gamma = args_eval.gamma
+    if transferopt is None:
+        transferopt = args_eval.transferopt
+    
     seg_info = GlobalVars.actions[action]
     if simulate:
         sim_util.reset_arms_to_side(sim_env)
     
-    cloud_dim = 6 if use_color else 3
-    old_cloud = get_action_cloud_ds(sim_env, action)[:,:cloud_dim]
-    old_rope_nodes = get_action_rope_nodes(sim_env, action)
+    cloud_dim = 6 if args_eval.use_color else 3
+    old_cloud = get_action_cloud_ds(sim_env, action, args_eval)[:,:cloud_dim]
+    old_rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
     
     closing_inds = get_closing_inds(seg_info)
     closing_hmats = {}
@@ -313,7 +317,7 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, use_color, i_step
         if animate:
             # color code: r demo, y transformed, g transformed resampled, b new
             handles.append(sim_env.env.plot3(old_cloud[:,:3], 2, (1,0,0)))
-            handles.append(sim_env.env.plot3(new_cloud[:,:3], 2, new_cloud[:,3:] if use_color else (0,0,1)))
+            handles.append(sim_env.env.plot3(new_cloud[:,:3], 2, new_cloud[:,3:] if args_eval.use_color else (0,0,1)))
             sim_env.viewer.Step()
 
         if not simulate or replay_full_trajs is None: # we are not simulating, we still want to compute the costs
@@ -336,13 +340,13 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, use_color, i_step
                 ### Generate fullbody traj
                 old_arm_traj_rs = mu.interp2d(timesteps_rs, np.arange(len(old_arm_traj)), old_arm_traj)
 
-                f, corr = register_tps(sim_env, state, action, use_color)
+                f, corr = register_tps(sim_env, state, action, args_eval)
                 if f is None: break
 
                 if animate:
-                    handles.append(sim_env.env.plot3(f.transform_points(old_cloud[:,:3]), 2, old_cloud[:,3:] if use_color else (1,1,0)))
+                    handles.append(sim_env.env.plot3(f.transform_points(old_cloud[:,:3]), 2, old_cloud[:,3:] if args_eval.use_color else (1,1,0)))
                     new_cloud_rs = corr.dot(new_cloud)
-                    handles.append(sim_env.env.plot3(new_cloud_rs[:,:3], 2, new_cloud_rs[:,3:] if use_color else (0,1,0)))
+                    handles.append(sim_env.env.plot3(new_cloud_rs[:,:3], 2, new_cloud_rs[:,3:] if args_eval.use_color else (0,1,0)))
                     handles.extend(draw_grid(sim_env, old_cloud[:,:3], f))
                 
                 x_na = old_cloud
@@ -533,32 +537,32 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, use_color, i_step
     
     return success, feasible, misgrasp, full_trajs
 
-def regcost_feature_fn(sim_env, state, action, use_color):
-    f, corr = register_tps_cheap(sim_env, state, action, use_color)
+def regcost_feature_fn(sim_env, state, action, args_eval):
+    f, corr = register_tps_cheap(sim_env, state, action, args_eval)
     if f is None:
         cost = np.inf
     else:
         cost = registration.tps_reg_cost(f)
     return np.array([float(cost)]) # no need to normalize since bending cost is independent of number of points
 
-def regcost_trajopt_feature_fn(sim_env, state, action, use_color):
-    obj_values_sum = compute_trans_traj(sim_env, state, action, use_color, None, simulate=False, transferopt='finger')
+def regcost_trajopt_feature_fn(sim_env, state, action, args_eval):
+    obj_values_sum = compute_trans_traj(sim_env, state, action, None, args_eval, simulate=False, transferopt='finger')
     return np.array([obj_values_sum])
 
-def jointopt_feature_fn(sim_env, state, action, use_color):
-    obj_values_sum = compute_trans_traj(sim_env, state, action, use_color, None, simulate=False, transferopt='joint')
+def jointopt_feature_fn(sim_env, state, action, args_eval):
+    obj_values_sum = compute_trans_traj(sim_env, state, action, None, args_eval, simulate=False, transferopt='joint')
     return np.array([obj_values_sum])
 
 def q_value_fn(state, action, sim_env, fn):
     return np.dot(WEIGHTS, fn(sim_env, state, action)) #+ w0
 
-def select_feature_fn(warping_cost, args):
+def select_feature_fn(warping_cost, args_eval):
     if warping_cost == "regcost":
-        feature_fn = lambda sim_env, state, action: regcost_feature_fn(sim_env, state, action, args.use_color)
+        feature_fn = lambda sim_env, state, action: regcost_feature_fn(sim_env, state, action, args_eval)
     elif warping_cost == "regcost-trajopt":
-        feature_fn = lambda sim_env, state, action: regcost_trajopt_feature_fn(sim_env, state, action, args.use_color)
+        feature_fn = lambda sim_env, state, action: regcost_trajopt_feature_fn(sim_env, state, action, args_eval)
     elif warping_cost == "jointopt":
-        feature_fn = lambda sim_env, state, action: jointopt_feature_fn(sim_env, state, action, args.use_color)
+        feature_fn = lambda sim_env, state, action: jointopt_feature_fn(sim_env, state, action, args_eval)
     else:
         raise RuntimeError("Invalid warping cost")
     return feature_fn
@@ -567,20 +571,19 @@ def get_unique_id():
     GlobalVars.unique_id += 1
     return GlobalVars.unique_id - 1
 
-def get_state(sim_env, use_color, args):
-    # TODO unify args
-    if args.raycast:
+def get_state(sim_env, args_eval):
+    if args_eval.raycast:
         new_cloud, endpoint_inds = sim_env.sim.raycast_cloud(endpoints=3)
         if new_cloud.shape[0] == 0: # rope is not visible (probably because it fall off the table)
             return None
     else:
-        new_cloud = sim_env.sim.observe_cloud(upsample=args.upsample, upsample_rad=args.upsample_rad)
-        endpoint_inds = np.zeros(len(new_cloud), dtype=bool) # for now, args.raycast=False is not compatible with args.use_color=True
-    if use_color:
+        new_cloud = sim_env.sim.observe_cloud(upsample=args_eval.upsample, upsample_rad=args_eval.upsample_rad)
+        endpoint_inds = np.zeros(len(new_cloud), dtype=bool) # for now, args_eval.raycast=False is not compatible with args_eval.use_color=True
+    if args_eval.use_color:
         new_cloud = color_cloud(new_cloud, endpoint_inds)
-    new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args.downsample else new_cloud
+    new_cloud_ds = clouds.downsample(new_cloud, DS_SIZE) if args_eval.downsample else new_cloud
     new_rope_nodes = sim_env.sim.rope.GetControlPoints()
-    new_rope_nodes= ropesim.observe_cloud(new_rope_nodes, sim_env.sim.rope_params.radius, upsample=args.upsample)
+    new_rope_nodes= ropesim.observe_cloud(new_rope_nodes, sim_env.sim.rope_params.radius, upsample=args_eval.upsample)
     state = ("eval_%i"%get_unique_id(), new_cloud_ds, new_rope_nodes)
     return state
 
@@ -606,12 +609,12 @@ def select_best_action(sim_env, state, num_actions_to_try, feature_fn, prune_fea
     return agenda, q_values_root
 
 def eval_on_holdout(args, sim_env):
-    feature_fn = select_feature_fn(args.warpingcost, args)
-    if args.warpingcost == 'regcost':
+    feature_fn = select_feature_fn(args.eval.warpingcost, args.eval)
+    if args.eval.warpingcost == 'regcost':
         prune_feature_fn = feature_fn # so that we can check for function equality
     else:
-        prune_feature_fn = select_feature_fn('regcost', args)
-    holdoutfile = h5py.File(args.holdoutfile, 'r')
+        prune_feature_fn = select_feature_fn('regcost', args.eval)
+    holdoutfile = h5py.File(args.eval.holdoutfile, 'r')
     holdout_items = eval_util.get_holdout_items(holdoutfile, args.tasks, args.taskfile, args.i_start, args.i_end)
 
     num_successes = 0
@@ -627,20 +630,20 @@ def eval_on_holdout(args, sim_env):
         if args.animation:
             sim_env.viewer.Step()
 
-        eval_util.save_task_results_init(args.resultfile, i_task, sim_env, init_rope_nodes, args)
+        eval_util.save_task_results_init(args.resultfile, i_task, sim_env, init_rope_nodes)
 
-        for i_step in range(args.num_steps):
+        for i_step in range(args.eval.num_steps):
             redprint("task %s step %i" % (i_task, i_step))
             sim_util.reset_arms_to_side(sim_env)
             
-            get_state_fn = lambda sim_env: get_state(sim_env, args.use_color, args)
+            get_state_fn = lambda sim_env: get_state(sim_env, args.eval)
             state = get_state_fn(sim_env)
             _, new_cloud_ds, new_rope_nodes = get_state_fn(sim_env)
 
-            num_actions_to_try = MAX_ACTIONS_TO_TRY if args.search_until_feasible else 1
+            num_actions_to_try = MAX_ACTIONS_TO_TRY if args.eval.search_until_feasible else 1
             eval_stats = eval_util.EvalStats()
 
-            agenda, q_values_root = select_best_action(sim_env, state, num_actions_to_try, feature_fn, prune_feature_fn, eval_stats, args.warpingcost)
+            agenda, q_values_root = select_best_action(sim_env, state, num_actions_to_try, feature_fn, prune_feature_fn, eval_stats, args.eval.warpingcost)
 
             time_machine.set_checkpoint('prechoice_%i'%i_step, sim_env)
             for i_choice in range(num_actions_to_try):
@@ -648,11 +651,11 @@ def eval_on_holdout(args, sim_env):
                     break
                 redprint("TRYING %s"%agenda[i_choice][1])
 
-                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(args.rope_params))
+                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(args.eval.rope_params))
                 best_root_action = agenda[i_choice][1]
                 start_time = time.time()
                 pre_trans, pre_rots = sim_util.get_rope_transforms(sim_env)
-                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_trans_traj(sim_env, get_state_fn, best_root_action, args.use_color, i_step, args.alpha, args.beta_pos, args.beta_rot, args.gamma, transferopt=args.transferopt, animate=args.animation, interactive=args.interactive)
+                eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_trans_traj(sim_env, get_state_fn, best_root_action, i_step, args.eval, animate=args.animation, interactive=args.interactive)
                 trans, rots = sim_util.get_rope_transforms(sim_env)
                 eval_stats.exec_elapsed_time += time.time() - start_time
 
@@ -663,7 +666,7 @@ def eval_on_holdout(args, sim_env):
                      redprint('TRYING NEXT ACTION')
 
             if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
-                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(args.rope_params))
+                time_machine.restore_from_checkpoint('prechoice_%i'%i_step, sim_env, sim_util.get_rope_params(args.eval.rope_params))
             print "BEST ACTION:", best_root_action
             
             eval_util.save_task_results_step(args.resultfile, i_task, i_step, sim_env, best_root_action, q_values_root, full_trajs, eval_stats, new_cloud_ds=new_cloud_ds, new_rope_nodes=new_rope_nodes)
@@ -683,8 +686,8 @@ def eval_on_holdout(args, sim_env):
         redprint('Eval Successes / Total: ' + str(num_successes) + '/' + str(num_total))
 
 def replay_on_holdout(args, sim_env):
-    holdoutfile = h5py.File(args.holdoutfile, 'r')
-    loadresultfile = h5py.File(args.loadresultfile, 'r')
+    holdoutfile = h5py.File(args.eval.holdoutfile, 'r')
+    loadresultfile = h5py.File(args.replay.loadresultfile, 'r')
     loadresult_items = eval_util.get_holdout_items(loadresultfile, args.tasks, args.taskfile, args.i_start, args.i_end)
 
     num_successes = 0
@@ -693,54 +696,54 @@ def replay_on_holdout(args, sim_env):
     for i_task, _ in loadresult_items:
         redprint("task %s" % i_task)
         sim_util.reset_arms_to_side(sim_env)
-        _, _, _, init_rope_nodes, loaded_args = eval_util.load_task_results_init(args.loadresultfile, i_task)
+        _, _, _, init_rope_nodes = eval_util.load_task_results_init(args.replay.loadresultfile, i_task)
         # don't call replace_rope and sim.settle() directly. use time machine interface for deterministic results!
         time_machine = sim_util.RopeSimTimeMachine(init_rope_nodes, sim_env)
 
         if args.animation:
             sim_env.viewer.Step()
 
-        eval_util.save_task_results_init(args.resultfile, i_task, sim_env, init_rope_nodes, args)
+        eval_util.save_task_results_init(args.resultfile, i_task, sim_env, init_rope_nodes)
         
         for i_step in range(len(loadresultfile[i_task]) - (1 if 'init' in loadresultfile[i_task] else 0)):
-            if args.simulate_traj_steps is not None and i_step not in args.simulate_traj_steps:
+            if args.replay.simulate_traj_steps is not None and i_step not in args.replay.simulate_traj_steps:
                 continue
             
             redprint("task %s step %i" % (i_task, i_step))
             sim_util.reset_arms_to_side(sim_env)
 
-            restore_from_saved_trans_rots = args.simulate_traj_steps is not None
+            restore_from_saved_trans_rots = args.replay.simulate_traj_steps is not None
             if restore_from_saved_trans_rots:
                 if i_step == 0:
-                    pre_trans, pre_rots = eval_util.load_task_results_init(args.loadresultfile, i_task)[:2]
+                    pre_trans, pre_rots = eval_util.load_task_results_init(args.replay.loadresultfile, i_task)[:2]
                 else:
-                    pre_trans, pre_rots = eval_util.load_task_results_step(args.loadresultfile, i_task, i_step-1)[:2]
+                    pre_trans, pre_rots = eval_util.load_task_results_step(args.replay.loadresultfile, i_task, i_step-1)[:2]
                 time_machine.set_checkpoint('preexec_%i'%i_step, sim_env, tfs=(pre_trans, pre_rots))
             else:
                 time_machine.set_checkpoint('preexec_%i'%i_step, sim_env)
-            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(loaded_args.rope_params))
+            time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(args.eval.rope_params))
             
-            get_state_fn = lambda sim_env: get_state(sim_env, loaded_args.use_color, args)
+            get_state_fn = lambda sim_env: get_state(sim_env, args.eval)
             _, new_cloud_ds, new_rope_nodes = get_state_fn(sim_env)
 
             eval_stats = eval_util.EvalStats()
 
-            trans, rots, _, best_action, q_values, replay_full_trajs, _, _ = eval_util.load_task_results_step(args.loadresultfile, i_task, i_step)
+            trans, rots, _, best_action, q_values, replay_full_trajs, _, _ = eval_util.load_task_results_step(args.replay.loadresultfile, i_task, i_step)
             
             if q_values.max() == -np.inf: # none of the demonstrations generalize
                 break
             
             start_time = time.time()
-            if i_step in args.compute_traj_steps: # compute the trajectory in this step
+            if i_step in args.replay.compute_traj_steps: # compute the trajectory in this step
                 replay_full_trajs = None
-            eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_trans_traj(sim_env, get_state_fn, best_action, loaded_args.use_color, i_step, transferopt=loaded_args.transferopt, animate=args.animation, interactive=args.interactive, replay_full_trajs=replay_full_trajs)
+            eval_stats.success, eval_stats.feasible, eval_stats.misgrasp, full_trajs = compute_trans_traj(sim_env, get_state_fn, best_action, i_step, args.eval, animate=args.animation, interactive=args.interactive, replay_full_trajs=replay_full_trajs)
             eval_stats.exec_elapsed_time += time.time() - start_time
 
             if eval_stats.feasible:
                  eval_stats.found_feasible_action = True
 
             if not eval_stats.feasible:  # If not feasible, restore_from_checkpoint
-                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(loaded_args.rope_params))
+                time_machine.restore_from_checkpoint('preexec_%i'%i_step, sim_env, sim_util.get_rope_params(args.eval.rope_params))
             print "BEST ACTION:", best_action
 
             replay_trans, replay_rots = sim_util.get_rope_transforms(sim_env)
@@ -766,7 +769,7 @@ def replay_on_holdout(args, sim_env):
         redprint('REPLAY Successes / Total: ' + str(num_successes) + '/' + str(num_total))
 
 def parse_input_args():
-    parser = argparse.ArgumentParser()
+    parser = util.ArgumentParser()
     
     parser.add_argument("--animation", type=int, default=0, help="if greater than 1, the viewer tries to load the window and camera properties without idling at the beginning")
     parser.add_argument("--interactive", action="store_true", help="step animation and optimization if specified")
@@ -787,6 +790,7 @@ def parse_input_args():
     subparsers = parser.add_subparsers(dest='subparser_name')
 
     parser_eval = subparsers.add_parser('eval')
+    
     parser_eval.add_argument('actionfile', type=str, nargs='?', default='data/misc/actions.h5')
     parser_eval.add_argument('holdoutfile', type=str, nargs='?', default='data/misc/holdout_set.h5')
 
@@ -819,7 +823,7 @@ def parse_input_args():
     parser_replay.add_argument("--simulate_traj_steps", type=int, default=None, nargs='*', metavar='i_step', 
                                help="if specified, restore the rope state from file and then simulate for the i_step of all tasks")
                                # if not specified, the rope state is not restored from file, but it is as given by the sequential simulation
-    
+
     return parser.parse_args()
 
 def setup_log_file(args):
@@ -832,18 +836,14 @@ def setup_log_file(args):
 def set_global_vars(args, sim_env):
     if args.random_seed is not None: np.random.seed(args.random_seed)
 
-    GlobalVars.actions = h5py.File(args.actionfile, 'r')
-    actions_root, actions_ext = os.path.splitext(args.actionfile)
+    GlobalVars.actions = h5py.File(args.eval.actionfile, 'r')
+    actions_root, actions_ext = os.path.splitext(args.eval.actionfile)
     GlobalVars.actions_cache = h5py.File(actions_root + '.cache' + actions_ext, 'a')
     
-    GlobalVars.downsample = args.downsample
-    if GlobalVars.downsample:
+    if args.eval.downsample:
         global clouds
         from rapprentice import clouds
     
-    GlobalVars.upsample = args.upsample
-    GlobalVars.upsample_rad = args.upsample_rad
-
 def load_simulation(args, sim_env):
     sim_env.env = openravepy.Environment()
     sim_env.env.StopSimulation()
@@ -851,22 +851,22 @@ def load_simulation(args, sim_env):
     sim_env.env.Load("./data/misc/pr2-beta-static-decomposed-shoulder.zae")
     sim_env.robot = sim_env.env.GetRobots()[0]
 
-    actions = h5py.File(args.actionfile, 'r')
+    actions = h5py.File(args.eval.actionfile, 'r')
     
-    init_rope_xyz, _ = sim_util.load_fake_data_segment(sim_env, actions, args.fake_data_segment, args.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
+    init_rope_xyz, _ = sim_util.load_fake_data_segment(sim_env, actions, args.eval.fake_data_segment, args.eval.fake_data_transform) # this also sets the torso (torso_lift_joint) to the height in the data
     table_height = init_rope_xyz[:,2].mean() - .02
     table_xml = sim_util.make_table_xml(translation=[1, 0, table_height + (-.1 + .01)], extents=[.85, .85, .1])
 #     table_xml = sim_util.make_table_xml(translation=[1-.3, 0, table_height + (-.1 + .01)], extents=[.85-.3, .85-.3, .1])
     sim_env.env.LoadData(table_xml)
     obstacle_bodies = []
-    if 'bookshelve' in args.obstacles:
+    if 'bookshelve' in args.eval.obstacles:
         sim_env.env.Load("data/bookshelves.env.xml")
         obstacle_bodies.extend(sim_env.env.GetBodies()[-1:])
-    if 'boxes' in args.obstacles:
+    if 'boxes' in args.eval.obstacles:
         sim_env.env.LoadData(sim_util.make_box_xml("box0", [.7,.43,table_height+(.01+.12)], [.12,.12,.12]))
         sim_env.env.LoadData(sim_util.make_box_xml("box1", [.74,.47,table_height+(.01+.12*2+.08)], [.08,.08,.08]))
         obstacle_bodies.extend(sim_env.env.GetBodies()[-2:])
-    if 'cylinders' in args.obstacles:
+    if 'cylinders' in args.eval.obstacles:
         sim_env.env.LoadData(sim_util.make_cylinder_xml("cylinder0", [.7,.43,table_height+(.01+.5)], .12, 1.))
         sim_env.env.LoadData(sim_util.make_cylinder_xml("cylinder1", [.7,-.43,table_height+(.01+.5)], .12, 1.))
         sim_env.env.LoadData(sim_util.make_cylinder_xml("cylinder2", [.4,.2,table_height+(.01+.65)], .06, .5))
@@ -905,32 +905,34 @@ def load_simulation(args, sim_env):
         for body in obstacle_bodies:
             sim_env.viewer.SetTransparency(body, .35)
     
-    if args.subparser_name == "eval":
-        if args.dof_limits_factor != 1.0:
-            assert 0 < args.dof_limits_factor and args.dof_limits_factor <= 1.0
-            active_dof_indices = sim_env.robot.GetActiveDOFIndices()
-            active_dof_limits = sim_env.robot.GetActiveDOFLimits()
-            for lr in 'lr':
-                manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
-                dof_inds = sim_env.robot.GetManipulator(manip_name).GetArmIndices()
-                limits = np.asarray(sim_env.robot.GetDOFLimits(dof_inds))
-                limits_mean = limits.mean(axis=0)
-                limits_width = np.diff(limits, axis=0)
-                new_limits = limits_mean + args.dof_limits_factor * np.r_[-limits_width/2.0, limits_width/2.0]
-                for i, ind in enumerate(dof_inds):
-                    active_dof_limits[0][active_dof_indices.tolist().index(ind)] = new_limits[0,i]
-                    active_dof_limits[1][active_dof_indices.tolist().index(ind)] = new_limits[1,i]
-            sim_env.robot.SetDOFLimits(active_dof_limits[0], active_dof_limits[1])
+    if args.eval.dof_limits_factor != 1.0:
+        assert 0 < args.eval.dof_limits_factor and args.eval.dof_limits_factor <= 1.0
+        active_dof_indices = sim_env.robot.GetActiveDOFIndices()
+        active_dof_limits = sim_env.robot.GetActiveDOFLimits()
+        for lr in 'lr':
+            manip_name = {"l":"leftarm", "r":"rightarm"}[lr]
+            dof_inds = sim_env.robot.GetManipulator(manip_name).GetArmIndices()
+            limits = np.asarray(sim_env.robot.GetDOFLimits(dof_inds))
+            limits_mean = limits.mean(axis=0)
+            limits_width = np.diff(limits, axis=0)
+            new_limits = limits_mean + args.eval.dof_limits_factor * np.r_[-limits_width/2.0, limits_width/2.0]
+            for i, ind in enumerate(dof_inds):
+                active_dof_limits[0][active_dof_indices.tolist().index(ind)] = new_limits[0,i]
+                active_dof_limits[1][active_dof_indices.tolist().index(ind)] = new_limits[1,i]
+        sim_env.robot.SetDOFLimits(active_dof_limits[0], active_dof_limits[1])
 
 def main():
     args = parse_input_args()
+
+    if args.subparser_name == "eval":
+        eval_util.save_results_args(args.resultfile, args)
+    elif args.subparser_name == "replay":
+        loaded_args = eval_util.load_results_args(args.replay.loadresultfile)
+        assert 'eval' not in vars(args)
+        args.eval = loaded_args.eval
+    else:
+        raise RuntimeError("Invalid subparser name")
     
-    independent_args = ["animation", "interactive", "resultfile", "tasks", "taskfile", "i_start", "i_end", "camera_matrix_file", "window_prop_file", "random_seed", "log", "print_mean_and_var"]
-    eval_util.save_results_args(args.resultfile, args, independent_args)
-
-    if args.subparser_name == "replay":
-        loaded_args = load_results_args(loadresultfile)
-
     setup_log_file(args)
     
     sim_env = sim_util.SimulationEnv()
