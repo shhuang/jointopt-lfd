@@ -4,7 +4,8 @@ from __future__ import division
 
 import pprint
 import argparse
-import eval_util, sim_util, util
+from ropesimulation import sim_util
+from rapprentice import eval_util, util
 import tps_registration as tps_registration_old
 from rapprentice import tps_registration, planning
  
@@ -16,9 +17,8 @@ from rapprentice.yes_or_no import yes_or_no
 import pdb, time
  
 import trajoptpy, openravepy
-import rope_qlearn
-from rope_qlearn import get_closing_pts, get_closing_inds
-from knot_classifier import isKnot as is_knot, calculateCrossings
+from ropesimulation.rope_utils import get_closing_pts, get_closing_inds
+from rapprentice.knot_classifier import isKnot as is_knot, calculateCrossings
 import os, os.path, numpy as np, h5py
 from numpy import asarray
 import atexit
