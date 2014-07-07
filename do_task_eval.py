@@ -93,10 +93,10 @@ def draw_finger_pts_traj(sim_env, flr2finger_pts_traj, color):
             handles.append(sim_env.env.drawlinestrip(np.r_[pts, pts[0][None,:]], 1, color))
     return handles
 
-def register_tps(sim_env, state, action, args_eval, interest_pts = None, closing_hmats = None, closing_finger_pts = None, reg_type='segment'):
+def register_tps(sim_env, state, action, args_eval, interest_pts = None, closing_hmats = None, closing_finger_pts = None):
     old_cloud = get_action_cloud(sim_env, action, args_eval)
     new_cloud = state[1]
-    if reg_type == 'segment':
+    if args_eval.reg_type == 'segment':
         old_rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
         state_id, new_cloud, new_rope_nodes = state
         def plot_cb(rope_nodes0, rope_nodes1, cloud0, cloud1, corr_nm, corr_nm_aug, f, pts_segmentation_inds0, pts_segmentation_inds1):
@@ -191,24 +191,31 @@ def register_tps(sim_env, state, action, args_eval, interest_pts = None, closing
         if corr is not None:
             corr = tps_registration.tile(corr, np.eye(args_eval.upsample_rad))
         
-    elif reg_type == 'rpm':
+    elif args_eval.reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
-    elif reg_type == 'bij':
+    elif args_eval.reg_type == 'bij':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         x_nd = old_cloud[:,:3]
         y_md = new_cloud[:,:3]
         scaled_x_nd, src_params = registration.unit_boxify(x_nd)
         scaled_y_md, targ_params = registration.unit_boxify(y_md)
-        f,g = registration.tps_rpm_bij(scaled_x_nd, scaled_y_md, rot_reg=np.r_[1e-4, 1e-4, 1e-1], n_iter=50, reg_init=10, reg_final=.1, outlierfrac=1e-2, vis_cost_xy=vis_cost_xy)
+        x_weights = np.ones(len(old_cloud)) * 1.0/len(old_cloud)
+        f,g = registration.tps_rpm_bij(scaled_x_nd, scaled_y_md, rot_reg=np.r_[1e-4, 1e-4, 1e-1], n_iter=50, reg_init=10, reg_final=.1, x_weights=x_weights, outlierfrac=1e-2, vis_cost_xy=vis_cost_xy)
+        corr = f._corr
+        bend_coef = f._bend_coef
+        rot_coef = f._rot_coef
+        wt_n = f._wt_n
         f = registration.unscale_tps(f, src_params, targ_params)
-        corr = None
+        f._bend_coef = bend_coef
+        f._rot_coef = rot_coef
+        f._wt_n = wt_n
     return f, corr
 
-def register_tps_cheap(sim_env, state, action, args_eval, reg_type='segment'):
+def register_tps_cheap(sim_env, state, action, args_eval):
     old_cloud = get_action_cloud(sim_env, action, args_eval)
     new_cloud = state[1]
-    if reg_type == 'segment':
+    if args_eval.reg_type == 'segment':
         old_rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
         old_rope_nodes_hash = hashlib.sha1(old_rope_nodes).hexdigest()
         if action not in GlobalVars.rope_nodes_crossing_info:
@@ -245,17 +252,17 @@ def register_tps_cheap(sim_env, state, action, args_eval, reg_type='segment'):
         f, corr = tps_registration.tps_segment_registration(GlobalVars.rope_nodes_crossing_info[action], GlobalVars.rope_nodes_crossing_info[state_id], 
                                                             cloud0 = old_cloud, cloud1 = new_cloud, corr_tile_pattern = np.eye(args_eval.upsample_rad), 
                                                             reg=np.array([0.00015, 0.00015, 0.0015]), x_weights=x_weights, plotting=False, plot_cb=plot_cb)
-    elif reg_type == 'rpm':
+    elif args_eval.reg_type == 'rpm':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         f, corr = tps_registration.tps_rpm(old_cloud[:,:3], new_cloud[:,:3], n_iter=14, em_iter=1, vis_cost_xy=vis_cost_xy, user_data={'old_cloud':old_cloud, 'new_cloud':new_cloud})
-    elif reg_type == 'bij':
+    elif args_eval.reg_type == 'bij':
         vis_cost_xy = tps_registration.ab_cost(old_cloud, new_cloud) if args_eval.use_color else None
         x_nd = old_cloud[:,:3]
         y_md = new_cloud[:,:3]
         scaled_x_nd, src_params = registration.unit_boxify(x_nd)
         scaled_y_md, targ_params = registration.unit_boxify(y_md)
         f,g = registration.tps_rpm_bij(scaled_x_nd, scaled_y_md, rot_reg=1e-3, n_iter=10, vis_cost_xy=vis_cost_xy)
-        corr = None
+        corr = f._corr
     return f, corr
 
 def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval, transferopt=None, animate=False, interactive=False, simulate=True, replay_full_trajs=None):
@@ -796,6 +803,7 @@ def parse_input_args():
 
     parser_eval.add_argument('warpingcost', type=str, choices=['regcost', 'regcost-trajopt', 'jointopt'])
     parser_eval.add_argument("transferopt", type=str, choices=['pose', 'finger', 'joint'])
+    parser_eval.add_argument("--reg_type", type=str, choices=['segment', 'rpm', 'bij'], default='segment')
     
     parser_eval.add_argument("--obstacles", type=str, nargs='*', choices=['bookshelve', 'boxes', 'cylinders'], default=[])
     parser_eval.add_argument("--raycast", type=int, default=0, help="use raycast or rope nodes observation model")
