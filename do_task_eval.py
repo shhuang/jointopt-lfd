@@ -51,7 +51,7 @@ def get_action_cloud(sim_env, action, args_eval):
 def get_action_cloud_ds(sim_env, action, args_eval):
     if args_eval.downsample:
         if action not in GlobalVars.actions_ds_clouds:
-            GlobalVars.actions_ds_clouds[action] = clouds.downsample(get_action_cloud(sim_env, action), DS_SIZE)
+            GlobalVars.actions_ds_clouds[action] = clouds.downsample(get_action_cloud(sim_env, action, args_eval), DS_SIZE)
         return GlobalVars.actions_ds_clouds[action]
     else:
         return get_action_cloud(sim_env, action, args_eval)
@@ -94,7 +94,7 @@ def draw_finger_pts_traj(sim_env, flr2finger_pts_traj, color):
     return handles
 
 def register_tps(sim_env, state, action, args_eval, interest_pts = None, closing_hmats = None, closing_finger_pts = None):
-    old_cloud = get_action_cloud(sim_env, action, args_eval)
+    old_cloud = get_action_cloud_ds(sim_env, action, args_eval)
     new_cloud = state[1]
     if args_eval.reg_type == 'segment':
         old_rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
@@ -213,7 +213,7 @@ def register_tps(sim_env, state, action, args_eval, interest_pts = None, closing
     return f, corr
 
 def register_tps_cheap(sim_env, state, action, args_eval):
-    old_cloud = get_action_cloud(sim_env, action, args_eval)
+    old_cloud = get_action_cloud_ds(sim_env, action, args_eval)
     new_cloud = state[1]
     if args_eval.reg_type == 'segment':
         old_rope_nodes = get_action_rope_nodes(sim_env, action, args_eval)
