@@ -16,7 +16,7 @@ def estimate_performance(results_file):
     misgrasps_logged = True
     timing_logged = True
 
-    for (i_task, task_info) in sorted(results_file.iteritems(), key=lambda item: int(item[0])):
+    for (i_task, task_info) in sorted([item for item in results_file.iteritems() if item[0].isdigit()], key=lambda item: int(item[0])):
         knot_exists = False
         infeasible = False
         misgrasp = False
@@ -55,10 +55,13 @@ def estimate_performance(results_file):
                 num_infeasible += 1
             elif misgrasp:
                 num_misgrasps += 1
-            print i_task
+            #print i_task
 
         if knot_exists:
             num_knots += 1
+            print "S"
+        else:
+            print "F"
     
     if misgrasps_logged:
         print "# Misgrasps:", num_misgrasps

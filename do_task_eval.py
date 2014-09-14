@@ -309,6 +309,7 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
     misgrasp = False
     full_trajs = []
     obj_values = []
+    handles_persistent = []
     for i_miniseg_group, miniseg_interval_group in enumerate(miniseg_interval_groups):
         if type(state_or_get_state_fn) == tuple:
             state = state_or_get_state_fn
@@ -321,9 +322,38 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
         handles = []
         if animate:
             # color code: r demo, y transformed, g transformed resampled, b new
-            handles.append(sim_env.env.plot3(old_cloud[:,:3], 2, (1,0,0)))
-            handles.append(sim_env.env.plot3(new_cloud[:,:3], 2, new_cloud[:,3:] if args_eval.use_color else (0,0,1)))
-            sim_env.viewer.Step()
+            if i_miniseg_group == 0:
+                handles_persistent.append(sim_env.env.plot3(old_cloud[:,:3], 10, (1,0,0)))
+                for i_miniseg_group2, miniseg_interval_group2 in enumerate(miniseg_interval_groups):
+                    for (i_miniseg_lr, lr, i_start, i_end) in miniseg_interval_group2:
+                        manip_name = {"l":"leftarm", "r":"rightarm"}[lr]                 
+                        old_arm_traj = asarray(seg_info[manip_name][i_start - int(i_start > 0):i_end+1])
+                        if sim_util.arm_moved(old_arm_traj):
+                            old_ee_traj = asarray(seg_info["%s_gripper_tool_frame"%lr]['hmat'][i_start - int(i_start > 0):i_end+1])
+                            old_finger_traj = sim_util.gripper_joint2gripper_l_finger_joint_values(seg_info['%s_gripper_joint'%lr][i_start - int(i_start > 0):i_end+1])[:,None]
+                            JOINT_LENGTH_PER_STEP = .1
+                            _, timesteps_rs = sim_util.unif_resample(old_arm_traj, JOINT_LENGTH_PER_STEP)
+                            old_ee_traj_rs = np.asarray(resampling.interp_hmats(timesteps_rs, np.arange(len(old_ee_traj)), old_ee_traj))
+                            old_finger_traj_rs = mu.interp2d(timesteps_rs, np.arange(len(old_finger_traj)), old_finger_traj)
+                            flr2old_finger_pts_traj_rs = sim_util.get_finger_pts_traj(sim_env, lr, (old_ee_traj_rs, old_finger_traj_rs))
+                            next_gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_end+1]) if i_end+1 < len(seg_info["%s_gripper_joint"%lr]) else True
+                            if not sim_env.sim.is_grabbing_rope(lr) and not next_gripper_open:
+                                manip_name = manip_name + "+" + "%s_gripper_l_finger_joint"%lr
+                                
+                                old_finger_closing_traj_start = old_finger_traj_rs[-1][0]
+                                old_finger_closing_traj_target = sim_util.get_binary_gripper_angle(sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_end+1]))
+                                old_finger_closing_traj_rs = np.linspace(old_finger_closing_traj_start, old_finger_closing_traj_target, np.ceil(abs(old_finger_closing_traj_target - old_finger_closing_traj_start) / .02))[:,None]
+                                closing_n_steps = len(old_finger_closing_traj_rs)
+                                old_ee_closing_traj_rs = np.tile(old_ee_traj_rs[-1], (closing_n_steps,1,1))
+                                flr2old_finger_pts_closing_traj_rs = sim_util.get_finger_pts_traj(sim_env, lr, (old_ee_closing_traj_rs, old_finger_closing_traj_rs))
+                                handles_persistent.extend(draw_finger_pts_traj(sim_env, flr2old_finger_pts_closing_traj_rs, (1,0,0)))
+                            handles_persistent.append(sim_env.env.drawlinestrip(old_ee_traj[:,:3,3], 2, (1,0,0)))
+                            flr2old_finger_pts_closing_traj_rs
+                            handles_persistent.extend(draw_finger_pts_traj(sim_env, flr2old_finger_pts_traj_rs, (1,0,0)))
+                sim_env.viewer.Idle()
+                handles_persistent.append(sim_env.env.plot3(new_cloud[:,:3], 10, new_cloud[:,3:] if args_eval.use_color else (0,0,1)))
+                sim_env.viewer.Idle()
+#                 sim_env.viewer.Step()
 
         if not simulate or replay_full_trajs is None: # we are not simulating, we still want to compute the costs
             group_full_trajs = []
@@ -349,10 +379,12 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
                 if f is None: break
 
                 if animate:
-                    handles.append(sim_env.env.plot3(f.transform_points(old_cloud[:,:3]), 2, old_cloud[:,3:] if args_eval.use_color else (1,1,0)))
-                    new_cloud_rs = corr.dot(new_cloud)
-                    handles.append(sim_env.env.plot3(new_cloud_rs[:,:3], 2, new_cloud_rs[:,3:] if args_eval.use_color else (0,1,0)))
-                    handles.extend(draw_grid(sim_env, old_cloud[:,:3], f))
+                    if i_miniseg_group == 0:
+                        handles.append(sim_env.env.plot3(f.transform_points(old_cloud[:,:3]), 10, old_cloud[:,3:] if args_eval.use_color else (0,1,0)))
+    #                     new_cloud_rs = corr.dot(new_cloud)
+    #                     handles.append(sim_env.env.plot3(new_cloud_rs[:,:3], 10, new_cloud_rs[:,3:] if args_eval.use_color else (0,1,0)))
+                        handles_persistent.extend(draw_grid(sim_env, old_cloud[:,:3], f, color = (0,1,0,1)))
+                        sim_env.viewer.Idle()
                 
                 x_na = old_cloud
                 y_ng = (corr/corr.sum(axis=1)[:,None]).dot(new_cloud)
@@ -382,19 +414,20 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
                 transformed_ee_traj_rs = np.asarray(resampling.interp_hmats(timesteps_rs, np.arange(len(transformed_ee_traj)), transformed_ee_traj))
                  
                 if animate:
-                    handles.append(sim_env.env.drawlinestrip(old_ee_traj[:,:3,3], 2, (1,0,0)))
-                    handles.append(sim_env.env.drawlinestrip(transformed_ee_traj[:,:3,3], 2, (1,1,0)))
+#                     handles.append(sim_env.env.drawlinestrip(old_ee_traj[:,:3,3], 2, (1,0,0)))
+#                     handles.append(sim_env.env.drawlinestrip(transformed_ee_traj[:,:3,3], 2, (1,1,0)))
                     handles.append(sim_env.env.drawlinestrip(transformed_ee_traj_rs[:,:3,3], 2, (0,1,0)))
-                    sim_env.viewer.Step()
+#                     sim_env.viewer.Step()
                 
                 print "planning pose trajectory following"
                 dof_inds = sim_util.dof_inds_from_name(sim_env.robot, manip_name)
                 joint_ind = sim_env.robot.GetJointIndex("%s_shoulder_lift_joint"%lr)
                 init_arm_traj = old_arm_traj_rs.copy()
                 init_arm_traj[:,dof_inds.index(joint_ind)] = sim_env.robot.GetDOFLimits([joint_ind])[0][0]
-                new_arm_traj, obj_value, pose_errs = planning.plan_follow_traj(sim_env.robot, manip_name, sim_env.robot.GetLink(ee_link_name), transformed_ee_traj_rs, init_arm_traj, 
-                                                                               start_fixed=i_miniseg_lr!=0,
-                                                                               beta_pos=beta_pos, beta_rot=beta_rot)
+                new_arm_traj = init_arm_traj
+#                 new_arm_traj, obj_value, pose_errs = planning.plan_follow_traj(sim_env.robot, manip_name, sim_env.robot.GetLink(ee_link_name), transformed_ee_traj_rs, init_arm_traj, 
+#                                                                                start_fixed=i_miniseg_lr!=0,
+#                                                                                beta_pos=beta_pos, beta_rot=beta_rot)
                 
                 if transferopt == 'finger' or transferopt == 'joint':
                     old_ee_traj_rs = np.asarray(resampling.interp_hmats(timesteps_rs, np.arange(len(old_ee_traj)), old_ee_traj))
@@ -410,9 +443,9 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
                         flr2finger_rel_pts[finger_lr] = sim_util.get_finger_rel_pts(finger_lr)
                     
                     if animate:
-                        handles.extend(draw_finger_pts_traj(sim_env, flr2old_finger_pts_traj_rs, (1,0,0)))
+#                         handles.extend(draw_finger_pts_traj(sim_env, flr2old_finger_pts_traj_rs, (1,0,0)))
                         handles.extend(draw_finger_pts_traj(sim_env, flr2transformed_finger_pts_traj_rs, (0,1,0)))
-                        sim_env.viewer.Step()
+#                         sim_env.viewer.Step()
                         
                     # enable finger DOF and extend the trajectories to include the closing part only if the gripper closes at the end of this minisegment
                     next_gripper_open = sim_util.binarize_gripper(seg_info["%s_gripper_joint"%lr][i_end+1]) if i_end+1 < len(seg_info["%s_gripper_joint"%lr]) else True
@@ -436,18 +469,22 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
                                                                                   flr2transformed_finger_pts_closing_traj_rs[finger_lr]]
                         
                         if animate:
-                            handles.extend(draw_finger_pts_traj(sim_env, flr2old_finger_pts_closing_traj_rs, (1,0,0)))
+#                             handles.extend(draw_finger_pts_traj(sim_env, flr2old_finger_pts_closing_traj_rs, (1,0,0)))
                             handles.extend(draw_finger_pts_traj(sim_env, flr2transformed_finger_pts_closing_traj_rs, (0,1,0)))
-                            sim_env.viewer.Step()
+                            sim_env.viewer.Idle()
+#                             sim_env.viewer.Step()
                     else:
                         init_traj = new_arm_traj
                     
                     print "planning finger points trajectory following"
+                    trajoptpy.SetInteractive(True)
                     new_traj, obj_value, pose_errs = planning.plan_follow_finger_pts_traj(sim_env.robot, manip_name, flr2finger_link, flr2finger_rel_pts, flr2transformed_finger_pts_traj_rs, init_traj, 
                                                                                           start_fixed=i_miniseg_lr!=0,
                                                                                           beta_pos=beta_pos, gamma=gamma)
+                    trajoptpy.SetInteractive(False)
                     
                     if transferopt == 'joint':
+                        trajoptpy.SetInteractive(True)
                         print "planning joint TPS and finger points trajectory following"
                         new_traj, f, new_N_z, \
                         obj_value, rel_pts_costs, tps_cost = planning.joint_fit_tps_follow_finger_pts_traj(sim_env.robot, manip_name, flr2finger_link, flr2finger_rel_pts, flr2old_finger_pts_traj_rs, new_traj, 
@@ -466,6 +503,7 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
                                                                                                                    x_na, y_ng, bend_coef, rot_coef, wt_n, old_N_z=new_N_z,
                                                                                                                    start_fixed=i_miniseg_lr!=0,
                                                                                                                    alpha=alpha, beta_pos=beta_pos, gamma=gamma)
+                        trajoptpy.SetInteractive(False)
                     else:
                         obj_value += alpha * planning.tps_obj(f, x_na, y_ng, bend_coef, rot_coef, wt_n)
                     
@@ -473,8 +511,8 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
                         flr2new_transformed_finger_pts_traj_rs = {}
                         for finger_lr in 'lr':
                             flr2new_transformed_finger_pts_traj_rs[finger_lr] = f.transform_points(np.concatenate(flr2old_finger_pts_traj_rs[finger_lr], axis=0)).reshape((-1,4,3))
-                        handles.extend(draw_finger_pts_traj(sim_env, flr2new_transformed_finger_pts_traj_rs, (0,1,1)))
-                        sim_env.viewer.Step()
+#                         handles.extend(draw_finger_pts_traj(sim_env, flr2new_transformed_finger_pts_traj_rs, (0,1,1)))
+#                         sim_env.viewer.Step()
                 else:
                     new_traj = new_arm_traj
                 
@@ -491,7 +529,8 @@ def compute_trans_traj(sim_env, state_or_get_state_fn, action, i_step, args_eval
                     handles.append(sim_env.env.drawlinestrip(sim_util.get_ee_traj(sim_env, lr, full_traj)[:,:3,3], 2, (0,0,1)))
                     flr2new_finger_pts_traj = sim_util.get_finger_pts_traj(sim_env, lr, full_traj)
                     handles.extend(draw_finger_pts_traj(sim_env, flr2new_finger_pts_traj, (0,0,1)))
-                    sim_env.viewer.Step()
+                    sim_env.viewer.Idle()
+#                     sim_env.viewer.Step()
             full_traj = sim_util.merge_full_trajs(group_full_trajs)
         else:
             full_traj = replay_full_trajs[i_miniseg_group]
@@ -682,6 +721,7 @@ def eval_on_holdout(args, sim_env):
                 break
             
             if is_knot(sim_env.sim.rope.GetControlPoints()):
+                sim_env.sim.settle(animate=1, max_steps=1000)
                 break;
 
         if is_knot(sim_env.sim.rope.GetControlPoints()):
